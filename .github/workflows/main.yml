@@ -3,7 +3,7 @@ run-name: Main Build
 on: [push]
 jobs:
   main-build:
-    runs-on: node:latest
+    runs-on: ubuntu:latest
     steps:
       - run: apt-get update
       - run: npm install terser -g
