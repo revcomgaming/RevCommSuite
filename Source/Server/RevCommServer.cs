@@ -33,13 +33,15 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Security.Cryptography.X509Certificates;
+using System.Security.Cryptography;
 using System.Security.Authentication;
 using System.Xml;
 using System.Data;
 using System.Runtime.InteropServices;
 using System.Reflection;
 using MySql.Data.MySqlClient;
-			
+using System.Threading.Tasks;
+
 namespace RevelationsStudios.RevCommServer {
 
 	/// <summary>
@@ -1482,8 +1484,12 @@ namespace RevelationsStudios.RevCommServer {
         /// <param name="nSetClientID">Client ID</param>
         public Client(TcpClient tcSetConnection, int nSetClientID) {
 
-/*          System.Security.Cryptography.RNGCryptoServiceProvider rcspGenerator;
+/*           System.Security.Cryptography.RNGCryptoServiceProvider rcspGenerator;
                                     /* Generator for Encryption Key and IV Block Information for "Peer-To-Peer" Server Start */
+/*           X509Certificate2 x509c2ServerCert = new X509Certificate2(ssConfig.SSLCertName);
+                                    /* Server SSL Certificate */
+/*           RSA rsaKey = RSA.Create();
+                                    /* Server SSL Key */
 
             try {
 
@@ -1497,8 +1503,23 @@ namespace RevelationsStudios.RevCommServer {
                 if (!boolNoSSL) {
                 
 	                ssSecureSend = new SslStream(nsSender, false);
-	                
-					ssSecureSend.AuthenticateAsServer(X509Certificate.CreateFromCertFile(ssConfig.SSLCertName), false, SslProtocols.Tls12, true);	
+
+                    X509Certificate2 x509c2ServerCert = new X509Certificate2(ssConfig.SSLCertName);
+                    RSA rsaKey = RSA.Create();
+
+                    rsaKey.ImportPkcs8PrivateKey(new ReadOnlySpan<byte>(
+                                                    Convert.FromBase64String(
+                                                        new Regex(@"-----(BEGIN|END)( RSA)? PRIVATE KEY-----[\W]*")
+                                                        .Replace(
+                                                            File.ReadAllText(
+                                                                ssConfig.SSLPrivKeyName).Trim(), 
+                                                            ""))),
+                                                 out int _);
+                    
+                    ssSecureSend.AuthenticateAsServer(new X509Certificate2(x509c2ServerCert.CopyWithPrivateKey(rsaKey).Export(X509ContentType.Pkcs12)), 
+                                                      false, 
+                                                      SslProtocols.Tls12, 
+                                                      true);	
                 }
 
                 /* Setup to Access to Receiver Functions */
@@ -1567,7 +1588,15 @@ namespace RevelationsStudios.RevCommServer {
             catch (Exception exError) {
 
                 boolMsgProcess = false;
+
                 ServerApp.Log("Action: Initializing holder for client information.", exError);
+
+                if (!boolNoSSL) { 
+
+                    ServerApp.Log("Inner Exception: " + exError.InnerException);
+                }
+
+                throw exError;
             }
         }
 
@@ -1976,8 +2005,10 @@ namespace RevelationsStudios.RevCommServer {
                 nCounter = 0;   /* Counter for Loop */
             DateTime dtWebSocketWaitEnd = DateTime.Now.AddMilliseconds(ssConfig.WebSocketConnectionWait);
                                 /* Time to End Waiting for Web Socket Handshake to Complete */
-            bool boolWebSocketSend = false;
+            bool boolWebSocketSend = false,
                                 /* Indicator That Messages Can Be Sent on Web Sockets */
+                 boolAfterWebSocketWaitData = false;
+                                /* Indicator That Received Data is Waiting After Web Socket Wait */
 
             try {
 
@@ -2050,21 +2081,22 @@ namespace RevelationsStudios.RevCommServer {
                         while (nsSender.DataAvailable) { 
 
                             if (boolNoSSL && 
-                                (boolDataRead = nsSender.CanRead)) { 
+                                (boolDataRead = nsSender.CanRead) &&
+                                (nMsgLen = tcConnection.ReceiveBufferSize) > 0) { 
 
-                                nMsgLen = tcConnection.ReceiveBufferSize;
                                 abyteMsgReceived = new byte[nMsgLen];
 
                                 nsSender.Read(abyteMsgReceived, 0, nMsgLen);
                             }
                             else if (ssSecureSend != null &&
-                                     (boolDataRead = ssSecureSend.CanRead) && 
-                                     ssSecureSend.Length > 0) {
+                                     (boolDataRead = ssSecureSend.CanRead)) {
 
-                                nMsgLen = tcConnection.ReceiveBufferSize;
-                                abyteMsgReceived = new byte[nMsgLen];
-                                            
-                                ssSecureSend.Read(abyteMsgReceived, 0, nMsgLen);
+                                abyteMsgReceived = new byte[nMaxSendBytes];
+
+                                if ((nMsgLen = ssSecureSend.Read(abyteMsgReceived, 0, nMaxSendBytes)) <= 0) { 
+
+                                    abyteMsgReceived = null;
+                                }
                             }
 
                             if (abyteMsgReceived != null) {
@@ -2074,7 +2106,7 @@ namespace RevelationsStudios.RevCommServer {
                                     strMsgCollect += Encoding.UTF8.GetString(abyteMsgReceived);
                                 }
                                 else {
-
+                                    
                                     switch (abyteMsgReceived[0] - 128) {
 
                                         case 1: {
@@ -2175,9 +2207,9 @@ namespace RevelationsStudios.RevCommServer {
                         ServerApp.Log("Action: Retrieving and sending user messages. Error: UDP socket closed for reading, switching back to TCP.");
                     }
 
-                    if (boolDataAvail) { 
+                    if (boolDataAvail || boolAfterWebSocketWaitData) { 
 
-                        if (boolDataRead) {
+                        if (boolDataRead || boolAfterWebSocketWaitData) {
                         
                             if (strMsgCollect.Trim().Length > 0) {
 
@@ -2306,6 +2338,8 @@ namespace RevelationsStudios.RevCommServer {
                                         nMsgStartIndex = strMsgCollect.IndexOf(strMsgStartChars);
                                     }
                                 }
+
+                                boolAfterWebSocketWaitData = false;
                             }
                         }
                         else {
@@ -2441,7 +2475,11 @@ namespace RevelationsStudios.RevCommServer {
 
                     if (!boolWebSocketSend) {
 
-                         boolWebSocketSend = DateTime.Now >= dtWebSocketWaitEnd;
+                        if ((boolWebSocketSend = DateTime.Now >= dtWebSocketWaitEnd) && 
+                            strMsgCollect.Trim().Length > 0) {
+
+                            boolAfterWebSocketWaitData = true;
+                        }
                     }
 
                     areThreadStopper.WaitOne(1);
@@ -2619,7 +2657,6 @@ namespace RevelationsStudios.RevCommServer {
 
                 ctNew.AddHTTPMsgData(ssConfig.ClientIDVar, nClientID.ToString());
                 ctNew.AddHTTPMsgData(ssConfig.GroupIDVar, strGroupID);
-                ctNew.AddHTTPMsgData(ssConfig.ClientIPAddressVar, strIPAddress);
                 ctNew.AddHTTPMsgData(ssConfig.TransactionIDVar, nNewTransID.ToString());
 
                 dcCommTrans.Add(nNewTransID, ctNew);
@@ -2651,20 +2688,10 @@ namespace RevelationsStudios.RevCommServer {
 
                     if (astrMsgParts.Length > 3) {
 
-                        if (int.TryParse(astrMsgParts[3], out nPort)) {
-                            
-			                boolTransSetup = StartHTTPTrans(nNewTransID, astrMsgParts[2], nPort, "HTTPPOST", true);
-                        }
-                        else {
-
-                            // Log Error
-        		            ServerApp.Log("Action: During setting up asynchronous HTTP POST communication transaction. Error: Getting the destination port from client message failed. Message: " + strMsg);
-                        }
+                        int.TryParse(astrMsgParts[3], out nPort);
                     }
-                    else {
 
-			            boolTransSetup = StartHTTPTrans(nNewTransID, astrMsgParts[2], nPort, "HTTPPOST", true);
-                    }
+			        boolTransSetup = StartHTTPTrans(nNewTransID, astrMsgParts[2], nPort, "HTTPPOST", true);
                 }
                 else {
                 
@@ -2702,20 +2729,10 @@ namespace RevelationsStudios.RevCommServer {
 
                     if (astrMsgParts.Length > 3) {
 
-                        if (int.TryParse(astrMsgParts[3], out nPort)) {
-                            
-			                boolTransSetup = StartHTTPTrans(nNewTransID, astrMsgParts[2], nPort, "HTTPPOST", false);
-                        }
-                        else {
-
-                            // Log Error
-        		            ServerApp.Log("Action: During setting up synchronous HTTP POST communication transaction. Error: Getting the destination port from client message failed. Message: " + strMsg);
-                        }
+                        int.TryParse(astrMsgParts[3], out nPort);
                     }
-                    else {
-                        
-			            boolTransSetup = StartHTTPTrans(nNewTransID, astrMsgParts[2], nPort, "HTTPPOST", false);
-                    }
+                    
+                    boolTransSetup = StartHTTPTrans(nNewTransID, astrMsgParts[2], nPort, "HTTPPOST", false);
                 }
                 else {
                 
@@ -2753,20 +2770,10 @@ namespace RevelationsStudios.RevCommServer {
 
                     if (astrMsgParts.Length > 3) {
 
-                        if (int.TryParse(astrMsgParts[3], out nPort)) {
-                            
-			                boolTransSetup = StartHTTPTrans(nNewTransID, astrMsgParts[2], nPort, "HTTPGET", true);
-                        }
-                        else {
-
-                            // Log Error
-        		            ServerApp.Log("Action: During setting up asynchronous HTTP GET communication transaction. Error: Getting the destination port from client message failed. Message: " + strMsg);
-                        }
+                        int.TryParse(astrMsgParts[3], out nPort);
                     }
-                    else {
-                        
-			            boolTransSetup = StartHTTPTrans(nNewTransID, astrMsgParts[2], nPort, "HTTPGET", true);
-                    }
+                    
+                    boolTransSetup = StartHTTPTrans(nNewTransID, astrMsgParts[2], nPort, "HTTPGET", true);
                 }
                 else {
                 
@@ -2804,20 +2811,10 @@ namespace RevelationsStudios.RevCommServer {
 
                     if (astrMsgParts.Length > 3) {
 
-                        if (int.TryParse(astrMsgParts[3], out nPort)) {
-                            
-			                boolTransSetup = StartHTTPTrans(nNewTransID, astrMsgParts[2], nPort, "HTTPGET", false);
-                        }
-                        else {
-
-                            // Log Error
-        		            ServerApp.Log("Action: During setting up synchronous HTTP GET communication transaction. Error: Getting the destination port from client message failed. Message: " + strMsg);
-                        }
+                        int.TryParse(astrMsgParts[3], out nPort);
                     }
-                    else {
-                        
-			            boolTransSetup = StartHTTPTrans(nNewTransID, astrMsgParts[2], nPort, "HTTPGET", false);
-                    }
+                    
+                    boolTransSetup = StartHTTPTrans(nNewTransID, astrMsgParts[2], nPort, "HTTPGET", false);
                 }
                 else {
                 
@@ -4211,7 +4208,7 @@ namespace RevelationsStudios.RevCommServer {
 
             if (Enum.TryParse(strSetTransType, out ctSetTransType)) { 
 
-			    if (!strSetHostName.StartsWith("http")) {
+			    if (!strSetHostName.StartsWith("http://") && !strSetHostName.StartsWith("https://")) {
 			
 				    strSetHostName = "http://" + strSetHostName;
 			    }			
@@ -4235,6 +4232,38 @@ namespace RevelationsStudios.RevCommServer {
                     case COMMTYPE.STREAM: {
 
                         new Thread(new ThreadStart(StartStream)).Start();
+                        break;
+                    }
+                    case COMMTYPE.HTTPGET: {
+
+                        if (nSetPort == 0) { 
+                        
+                            if (boolNoSSL) { 
+
+                                nServerPort = ssConfig.DefaultHTTPPort;
+                            }
+                            else { 
+                                    
+                                nServerPort = ssConfig.DefaultHTTPSSLPort;
+                            }
+                        }
+
+                        break;
+                    }
+                    case COMMTYPE.HTTPPOST: {
+                            
+                        if (nSetPort == 0) { 
+                        
+                            if (boolNoSSL) { 
+
+                                nServerPort = ssConfig.DefaultHTTPPort;
+                            }
+                            else { 
+                                    
+                                nServerPort = ssConfig.DefaultHTTPSSLPort;
+                            }
+                        }
+
                         break;
                     }
                 }
@@ -4436,8 +4465,6 @@ namespace RevelationsStudios.RevCommServer {
 	
 	                                    strDownloadFile = astrMsgInfo[1];
 	
-	                                    //strFileStatus = "Downloading file: " + strDownloadFile + " at " + ((Convert.ToInt32(astrMsgInfo[2]) * 100) / Convert.ToInt32(strFileLen)) + "%.";
-	
 	                                    /* Find Where the Actual Message Starts, Ends, and How Long it is */
 	                                    nFileStartIndex = FindCharIndex(abyteMessage, astrMsgInfo[0] + strMsgPartEndChars + astrMsgInfo[1] + strMsgPartEndChars + astrMsgInfo[2] + strMsgPartEndChars, nOrigMsgStartIndex, nOrigMsgEndIndex, true);
 	                                    nFileEndIndex = FindCharIndex(abyteMessage, strMsgEndChars, nFileStartIndex, nOrigMsgEndIndex, false);
@@ -4464,8 +4491,6 @@ namespace RevelationsStudios.RevCommServer {
 	                                    
 	                                    strDownloadFile = astrMsgInfo[1];
 	                                    strFileLen = astrMsgInfo[2];
-	
-	                                   // strFileStatus = "Downloading file: " + strDownloadFile + ".";
 	
 	                                    if (dictFileStorage.ContainsKey(strDownloadFile)) {
 	
@@ -4573,8 +4598,6 @@ namespace RevelationsStudios.RevCommServer {
 	                        	
 	                            boolFileEnd = false;
 	                            boolNotFileOp = true;
-	
-	                            //strFileStatus = "Downloading file: " + strDownloadFile + " complete.";
 	                        }
 	                    }
 	                }
@@ -4592,6 +4615,12 @@ namespace RevelationsStudios.RevCommServer {
 	    private void DoSSLCommunication() {
 	    
 	    	lock (ssSecConnection) {
+	    					
+			    if (ssSecConnection == null) {
+					
+				    ssSecConnection = new SslStream(nsConnection, true, ValidateHTTPSSLCert);
+                    ssSecConnection.AuthenticateAsClient(strStreamSSLServerName);
+                }
 	    	
 	    		DoCommunication();
 	    	}
@@ -4658,7 +4687,7 @@ namespace RevelationsStudios.RevCommServer {
 					    /* Else If Using SSL, Make Sure Settings and Default Port Are Correct */
 					    strSendURL = strSendURL.Replace("http://", "https://");
 	
-					    if (!strSendURL.Contains(":" + nServerPort.ToString())) {
+					    if (nServerPort != 443 && !strSendURL.Contains(":" + nServerPort.ToString())) {
 							
 					        strSendURL += ":" + nServerPort;
 					    }								
@@ -4694,23 +4723,27 @@ namespace RevelationsStudios.RevCommServer {
 					    hwrSender.Method = "POST";
 					    hwrSender.ContentType = "application/x-www-form-urlencoded";
 					    hwrSender.ContentLength = abyteDataEncode.Length;
-					
-                        try {
 
-                            smPostDataSender = hwrSender.GetRequestStream();
-                            smPostDataSender.Write(abyteDataEncode, 0, abyteDataEncode.Length);
-                            smPostDataSender.Close();
-
-                            /* Get Response Message from Processing Page */
-                            hwrRetriever = (HttpWebResponse)hwrSender.GetResponse();
-                            srRetrieveRead = new StreamReader(hwrRetriever.GetResponseStream());
-                            strRetMsg = srRetrieveRead.ReadToEnd();
-
-                            srRetrieveRead.Close();
-                            hwrRetriever.Close();
-                        }
-                        catch (WebException weError) { /* Gracefully Ignore Exceptions from URL Connection Failures */ }
+                        smPostDataSender = hwrSender.GetRequestStream();
+                        smPostDataSender.Write(abyteDataEncode, 0, abyteDataEncode.Length);
+                        smPostDataSender.Close();
 				    }
+					
+                    try {
+
+                        /* Get Response Message from Processing Page */
+                        hwrRetriever = (HttpWebResponse)hwrSender.GetResponse();
+                        srRetrieveRead = new StreamReader(hwrRetriever.GetResponseStream());
+                        strRetMsg = srRetrieveRead.ReadToEnd();
+
+                        srRetrieveRead.Close();
+                        hwrRetriever.Close();
+                    }
+                    catch (WebException weError) {
+
+                        ServerApp.Log("Action: Sending HTTP transmission. Host: " + strHostName + ", Port: " + nServerPort + ", Processing Page: " + strHTTPProcessPage +
+                                        ". Error occurred: " + weError.Message);
+                    }
 				
 				    ClearHTTPMsgData();
 			    }
@@ -5102,24 +5135,37 @@ namespace RevelationsStudios.RevCommServer {
 	    		
 	    		if (value) {
 	    								
-	    			boolNoSSL = false;        
-	    					
-					if (ssSecConnection != null) {
-					
-						ssSecConnection = new SslStream(nsConnection, true, ValidateHTTPSSLCert);
-					}
-					
-					ssSecConnection.AuthenticateAsClient(strStreamSSLServerName);					
+	    			boolNoSSL = false;
+
+                    if (nServerPort == ssConfig.DefaultHTTPPort) { 
+                        
+                        nServerPort = ssConfig.DefaultHTTPSSLPort;
+                    }
+
+                    if (strHostName.StartsWith("http://")) {
+
+                        strHostName = strHostName.Replace("http://", "https://");
+                    }
 	    		}
 	    		else {
 	    		
-	    			boolNoSSL = true;  
+	    			boolNoSSL = true; 
+
+                    if (nServerPort == ssConfig.DefaultHTTPSSLPort) { 
+                        
+                        nServerPort = ssConfig.DefaultHTTPPort;
+                    } 
 	    			
 	    			if (ssSecConnection != null) {	
 	    			
 	    				ssSecConnection.Close();
 	    				ssSecConnection = null;
 	    			}
+
+                    if (strHostName.StartsWith("https://")) {
+
+                        strHostName = strHostName.Replace("https://", "http://");
+                    }
 	    		}
 	    	}
 	    }
@@ -5162,13 +5208,17 @@ namespace RevelationsStudios.RevCommServer {
 
     /// <summary>
     ///     Data Operations Base Object
+    /// </summary>    /// <summary>
+    ///     Data Operations Base Object
     /// </summary>
     internal class DataOperation {
-        
-		private MySqlConnection mscDBAccess = null;
-									/* Database Access for Database Commands */
-        private bool boolIsAvailable = false;
-                                    /* Indicator That Connection is Available for Use */
+
+        private Queue<MySqlConnection> qmscDBAvailAccess = new Queue<MySqlConnection>();
+									/* Available Database Access Connections for Database Commands */
+		private List<MySqlConnection>ltmscDBUsedAccess = new List<MySqlConnection>();
+									/* Used Database Access Connections for Database Commands */
+        private int nMaxConns = ServerApp.Settings.DBMaxConnectPerObj; 
+                                    /* Maximum Number of Database Connections */
  
         /// <param name="strServerName">Name of Database Server</param>
         /// <param name="strDatabaseName">Name of Database</param>
@@ -5192,27 +5242,39 @@ namespace RevelationsStudios.RevCommServer {
         /// <param name="strUserName">Username for Accessing Database</param>
         /// <param name="strPassword">Password for Accessing Database</param>
         /// <param name="boolUseSSL">Indicator to Use SSL Connection</param>
-        /// <returns>Database Connection If Connection is Successful or Already Exists, Else NULL</returns>
-        protected MySqlConnection Connection(string strServerName,
-                                             string strDatabaseName,
-                                             string strUserName,
-                                             string strPassword,
-                                             bool boolUseSSL = false) {
+        /// <returns>Indicator That Connection was Setup</returns>
+        protected bool Connection(string strServerName,
+                                  string strDatabaseName,
+                                  string strUserName,
+                                  string strPassword,
+                                  bool boolUseSSL = false) {
 
+//            string strConnString = "",
             string strSSLValue = "None";
+            bool boolSetup = false;
+            int nCounter = 0;
 
             if (boolUseSSL) {
 
                 strSSLValue = "Required";
             }
 
+            string strConnString = "SERVER=" + strServerName + ";DATABASE=" + strDatabaseName +
+                                   ";UID=" + strUserName + ";PASSWORD=" + strPassword + ";SSL Mode=" + strSSLValue;
+
             try {
 
-                Close(true);
+                foreach (MySqlConnection qmscSelect in ltmscDBUsedAccess) {
 
-                mscDBAccess = new MySqlConnection("SERVER=" + strServerName + ";DATABASE=" + strDatabaseName + 
-                                                  ";UID=" + strUserName + ";PASSWORD=" + strPassword + ";SSL Mode=" + strSSLValue);
-                boolIsAvailable = true;
+                    Close(qmscSelect, true, true, false);
+                }
+
+                for (nCounter = 0; nCounter < nMaxConns; nCounter++) {
+
+                    qmscDBAvailAccess.Enqueue(new MySqlConnection(strConnString));
+                }
+
+                boolSetup = qmscDBAvailAccess.Count > 0;
             }
             catch (Exception exError) {
 
@@ -5220,17 +5282,8 @@ namespace RevelationsStudios.RevCommServer {
                               exError);
             }
 
-            return mscDBAccess;
+            return boolSetup;
         }
-
-        ///// <summary>
-        /////     Activate Database Access
-        ///// </summary>
-        ///// <returns>Database Connection If Connection Already Exists, Else NULL</returns>
-        //protected MySqlConnection Connection() {
-
-        //    return mscDBAccess;
-        //}
 
         /// <summary>
         ///     Opens Database Connection
@@ -5241,24 +5294,25 @@ namespace RevelationsStudios.RevCommServer {
             MySqlConnection mscRetAccess = null;
                                     /* Copy of Database Access to Send If its Open */
 
-            if (mscDBAccess != null && boolIsAvailable) { 
+            if (qmscDBAvailAccess.Count > 0) {
 
-                if (mscDBAccess.State == ConnectionState.Broken) {
+                mscRetAccess = qmscDBAvailAccess.Dequeue();
 
-                    Close();
+                if (mscRetAccess.State == ConnectionState.Broken) {
+
+                    mscRetAccess.Close();
                 }
 
-                if (mscDBAccess.State == ConnectionState.Closed) {
+                if (mscRetAccess.State == ConnectionState.Closed) {
 
-                    mscDBAccess.Open();
+                    mscRetAccess.Open();
                 }
 
-                if (mscDBAccess.State == ConnectionState.Open) {
+                if (mscRetAccess.State != ConnectionState.Broken) {
 
-                    mscRetAccess = mscDBAccess;
-                    boolIsAvailable = false;
+                    ltmscDBUsedAccess.Add(mscRetAccess);
                 }
-                else if (mscDBAccess.State == ConnectionState.Broken) {
+                else { 
 
                     /* If Connection is Still Broken, Throw Exception */
                     throw new Exception("Action: Opening connection to database. Error: Connection broken.");
@@ -5269,17 +5323,94 @@ namespace RevelationsStudios.RevCommServer {
         }
 
         /// <summary>
+        ///     Opens Asynchronous Database Connection
+        /// </summary>
+        /// <returns>Database Connection If Connection Already Exists, Else NULL</returns>
+        protected async Task<MySqlConnection> OpenAsync() {
+
+            MySqlConnection mscRetAccess = null;
+                                    /* Copy of Database Access to Send If its Open */
+
+            if (qmscDBAvailAccess.Count > 0) {
+
+                mscRetAccess = qmscDBAvailAccess.Dequeue();
+
+                if (mscRetAccess.State == ConnectionState.Broken) {
+
+                    await mscRetAccess.CloseAsync();
+                }
+
+                if (mscRetAccess.State == ConnectionState.Closed) {
+
+                    await mscRetAccess.OpenAsync();
+                }
+
+                if (mscRetAccess.State != ConnectionState.Broken) {
+
+                    ltmscDBUsedAccess.Add(mscRetAccess);
+                }
+                else { 
+
+                    /* If Connection is Still Broken, Throw Exception */
+                    throw new Exception("Action: Opening asynchronous connection to database. Error: Connection broken.");
+                } 
+            }
+
+            return mscRetAccess;
+        }
+
+        /// <summary>
         ///     Close Database Connection
         /// </summary>
-        /// <param name="boolClear">Indicator to Clear Database Connection, Defaults to False</param>
-        protected void Close(bool boolClear = false) {
+        /// <param name="boolIsSynch">Indicator Database Connection was Synchronous, Defaults to True</param>
+        /// <param name="boolDispose">Indicator to Dispose of Database Connection Aftter Closing, Defaults to False</param>
+        /// <param name="boolKeep">Indicator to Put Database Connection Back in Available Pool, Else Pool Count is Reduced, Defaults to True</param>
+        protected void Close(bool boolIsSynch = true, bool boolDispose = false, bool boolKeep = true) { 
+        
+            foreach (MySqlConnection mscSelect in ltmscDBUsedAccess) {
 
-            if (mscDBAccess != null) { 
+                Close(mscSelect, boolIsSynch, boolDispose, boolKeep);
+            }
+        }
 
-                mscDBAccess.Close();
-                boolIsAvailable = mscDBAccess.State == ConnectionState.Closed;
+        /// <summary>
+        ///     Close Database Connection
+        /// </summary>
+        /// <param name="mscDBAccess">Database Connection to Close</param>
+        /// <param name="boolIsSynch">Indicator Database Connection was Synchronous, Defaults to True</param>
+        /// <param name="boolDispose">Indicator to Dispose of Database Connection Aftter Closing, Defaults to False</param>
+        /// <param name="boolKeep">Indicator to Put Database Connection Back in Available Pool, Else Pool Count is Reduced, Defaults to True</param>
+        protected async void Close(MySqlConnection mscDBAccess, bool boolIsSynch = true, bool boolDispose = false, bool boolKeep = true) {
 
-                if (boolClear) {
+            if (mscDBAccess != null && ltmscDBUsedAccess.Contains(mscDBAccess)) { 
+
+                if (boolIsSynch) { 
+
+                    mscDBAccess.Close();
+                }
+                else {
+
+                    await mscDBAccess.CloseAsync();
+                }
+
+                if (boolDispose || !boolKeep) { 
+                
+                    if (boolIsSynch) { 
+
+                        mscDBAccess.Dispose();
+                    }
+                    else {
+
+                        await mscDBAccess.DisposeAsync();
+                    }
+                }
+
+                if (boolKeep) {
+
+                    ltmscDBUsedAccess.Remove(mscDBAccess);
+                    qmscDBAvailAccess.Enqueue(mscDBAccess);
+                }
+                else { 
 
                     mscDBAccess = null;
                 }
@@ -5480,7 +5611,7 @@ namespace RevelationsStudios.RevCommServer {
                                                  "WHERE " + strDataIDFieldName + " = " + strID, mscDBAccess).ExecuteNonQuery();
 	        				}
 	        				
-	        				Close();
+	        				Close(mscDBAccess);
 	        			}
                         else {
 
@@ -5549,7 +5680,7 @@ namespace RevelationsStudios.RevCommServer {
 	        		    }
 	        		}
 
-        			Close();						
+        			Close(mscDBAccess);						
         		}
 										
 				if (fsFileAccess != null) {
@@ -5804,6 +5935,21 @@ namespace RevelationsStudios.RevCommServer {
             }
 
             return base.Open();
+        }
+
+        /// <summary>
+        ///     Opens Asynchronous Database Connection, If Processing Setup, Will Added Setup to Connection to Get Server Commands
+        /// </summary>
+        /// <param name="boolDoSetup">Identicator for Doing Setup for Database Communication</param>
+        /// <returns>Database Connection If Exists, Else NULL</returns>
+        protected async Task<MySqlConnection> OpenAsync(bool boolDoSetup = false) {
+
+            if (boolDoSetup) {
+
+                Setup();
+            }
+
+            return await base.OpenAsync();
         }
 
         /// <summary>
@@ -6299,21 +6445,13 @@ namespace RevelationsStudios.RevCommServer {
                 
                 while (boolConnSuccess && boolContinue) {
 
-                    if ((mscDBAccess = Open()) != null) {
+                    if ((mscDBAccess = boolAsync ? await OpenAsync() : Open()) != null) {
 
                         mscdQuerier.Connection = mscDBAccess;
 
                         if (boolQuery) { 
 
-                            if (boolAsync) {
-
-                                msdrRecReader = (MySqlDataReader)await mscdQuerier.ExecuteReaderAsync();
-                            }
-                            else {
-
-                                msdrRecReader = mscdQuerier.ExecuteReader();
-                            }
-
+                            msdrRecReader = boolAsync ? (MySqlDataReader)await mscdQuerier.ExecuteReaderAsync() : mscdQuerier.ExecuteReader();
                             nFieldCount = msdrRecReader.FieldCount;
 
                             for (nCounter = 0; nCounter < nFieldCount; nCounter++) {
@@ -6323,7 +6461,7 @@ namespace RevelationsStudios.RevCommServer {
 
                             sbStorage.Append("[");
 
-                            while (msdrRecReader.Read()) {
+                            while (boolAsync ? await msdrRecReader.ReadAsync() : msdrRecReader.Read()) {
 
                                 if (boolNotFirstRow) {
 
@@ -6371,19 +6509,21 @@ namespace RevelationsStudios.RevCommServer {
 
                             sbStorage.Append("]");
 
-                            msdrRecReader.Close();
-                            msdrRecReader = null;
+                            if (boolAsync) { 
+
+                                await msdrRecReader.CloseAsync();
+                                await msdrRecReader.DisposeAsync();
+                            
+                            }
+                            else { 
+
+                                msdrRecReader.Close();
+                                msdrRecReader.Dispose();
+                            }
                         }
                         else {
 
-                            if (boolAsync) {
-
-                                nRowsAffected = await mscdQuerier.ExecuteNonQueryAsync();
-                            }
-                            else {
-
-                                nRowsAffected = mscdQuerier.ExecuteNonQuery();
-                            }
+                            nRowsAffected = boolAsync ? await mscdQuerier.ExecuteNonQueryAsync() : mscdQuerier.ExecuteNonQuery();
 
                             sbStorage.Append("[{\"rows\": " + nRowsAffected.ToString() + "}]");
 
@@ -6424,13 +6564,13 @@ namespace RevelationsStudios.RevCommServer {
                             }
 
                             mscdDataProcessReturn.Connection = mscDBAccess;
-                            msdrRecReader = mscdDataProcessReturn.ExecuteReader();
+                            msdrRecReader = boolAsync ? (MySqlDataReader)await mscdDataProcessReturn.ExecuteReaderAsync() : mscdDataProcessReturn.ExecuteReader();
 
                             if (msdrRecReader.HasRows) { 
 
                                 sbStorage.Clear();
 
-                                while (msdrRecReader.Read()) {
+                                while (boolAsync ? await msdrRecReader.ReadAsync() : msdrRecReader.Read()) {
 
                                     sbStorage.Append(msdrRecReader.GetString(1));
 
@@ -6438,8 +6578,17 @@ namespace RevelationsStudios.RevCommServer {
                                 }
                             }
 
-                            msdrRecReader.Close();
-                            msdrRecReader = null;
+                            if (boolAsync) { 
+
+                                await msdrRecReader.CloseAsync();
+                                await msdrRecReader.DisposeAsync();
+                            
+                            }
+                            else { 
+
+                                msdrRecReader.Close();
+                                msdrRecReader.Dispose();
+                            }
                         }
 
                         if (boolRetResults) { 
@@ -6472,7 +6621,7 @@ namespace RevelationsStudios.RevCommServer {
                             }
                         }
 
-                        Close();
+                        Close(mscDBAccess, !boolAsync);
 
                         if (ltlDeleteIDs.Count > 0) { 
 
@@ -6493,7 +6642,7 @@ namespace RevelationsStudios.RevCommServer {
            	}
         	catch (Exception exError) {
 
-                Close();
+                Close(mscDBAccess, !boolAsync);
         								
         		ServerApp.Log("Action: Outputting to database, '" + strDatabaseOutName + "'.", exError);
         	}					
@@ -6523,7 +6672,7 @@ namespace RevelationsStudios.RevCommServer {
                         mssQuerier.Delimiter = ServerApp.Settings.DBProcDelimiter;
                         mssQuerier.Execute();
 
-                        Close();
+                        Close(mscDBAccess);
 
                         boolContinue = false;
                     }
@@ -6533,7 +6682,7 @@ namespace RevelationsStudios.RevCommServer {
             }
         	catch (Exception exError) {
 
-        		Close();
+        		Close(mscDBAccess);
         								
         		ServerApp.Log("Action: Running statement on database, '" + strDatabaseOutName + "'. Statement: " + strDataStatement + ".", 
                               exError);
@@ -6572,8 +6721,7 @@ namespace RevelationsStudios.RevCommServer {
                  boolContinue = true;
                                     /* Indicator to Continue Process Data Maps */
 
-            while (boolConnSuccess && 
-                   boolContinue) {
+            while (boolConnSuccess && boolContinue) {
 
                 if (boolRunDataMaps) { 
 
@@ -6696,12 +6844,13 @@ namespace RevelationsStudios.RevCommServer {
                                     }
 
                                     msdrRecReader.Close();
+                                    msdrRecReader.Dispose();
                                     msdrRecReader = null;
 
                                     ltstrDataTypes.Clear();
                                     sbStorage.Clear();
 
-                                    Close();
+                                    Close(mscDBAccess);
 
                                     dmSelect.AdvanceTime();
                                 }
@@ -6916,7 +7065,7 @@ namespace RevelationsStudios.RevCommServer {
 		/// <returns>True If Message was Outputted to Database, Else False</returns>
         public bool Output(string strMsg) {
         	
-            MySqlConnection mscDBAccess;
+            MySqlConnection mscDBAccess = null;
                                     /* Database Access for Database Commands */
             bool boolMsgSent = false;
 									/* Indicator That Message was Sent */            
@@ -6929,7 +7078,7 @@ namespace RevelationsStudios.RevCommServer {
 
                         new MySqlCommand("INSERT INTO " + strDataTableName + " VALUES (" + strDataMsgFieldName + ") = '" + strMsg + "'", mscDBAccess).ExecuteNonQuery();
 
-                        Close();
+                        Close(mscDBAccess);
                     }
                     else {
 
@@ -6945,7 +7094,7 @@ namespace RevelationsStudios.RevCommServer {
            	}
         	catch (Exception exError) {
 
-                Close();
+                Close(mscDBAccess);
         								
         		ServerApp.Log("Action: Outputting to database, '" + strDatabaseOutName + "', message: '" + strMsg + "'.", exError);
         	} 
@@ -7064,12 +7213,16 @@ namespace RevelationsStudios.RevCommServer {
                     nPort = 59234,
                     nUDPPort = 59333,
                     nClientPeerPortDefault = 59432,
-                    nDefaultHTTPPort = 80;  
+                    nDefaultHTTPPort = 80,
+                    nDefaultHTTPSSLPort = 443,
+                    nMaxDBConnectPerObj = 10;  
                                     /* Maximum Number of Messages to Hold for Backup Replay, 
                                        Selected Port, 
                                        Default UDP Port, 
                                        Default Port for Client Peer to Peer Connections and 
-                                       Default HTTP Port */
+                                       Default HTTP Port
+                                       Default HTTP SSL Port
+                                       Default Number of Database Connections Specific Objects Can Make */
 	    private string strLogFilePath = "logs/",
 	        						/* Path to Where Log Files are Saved to */
 					   strFileStorePath = "files/",
@@ -7135,8 +7288,10 @@ namespace RevelationsStudios.RevCommServer {
         							/* List of Databases to Store Incoming Direct Messages in */
         private List<FileOut> ltfoFileDirectMsgStore = new List<FileOut>();
         							/* List of Databases to Store Incoming Direct Messages in */
-		private string strSSLCertName = ""; 
+		private string strSSLCertName = "", 
 									/* Name of the Server's SSL Certificate */
+                       strSSLPrivKeyName = "";
+                                    /* Name of the Private Key for the Server's SSL Certificate */
 		private int nRandSeed = new Random().Next();
 									/* Seed for Generating Transaction IDs */
 		private List<ServerCommands> ltscCommands = new List<ServerCommands>();
@@ -7207,6 +7362,13 @@ namespace RevelationsStudios.RevCommServer {
                 if (strSettingValue != "" && int.TryParse(strSettingValue, out nSettingValue)) {
 
                     nDefaultHTTPPort = nSettingValue;
+                }
+
+                strSettingValue = GetConfigSetting("//settings/defaulthttpsslport");
+
+                if (strSettingValue != "" && int.TryParse(strSettingValue, out nSettingValue)) {
+
+                    nDefaultHTTPSSLPort = nSettingValue;
                 }
 
                 /* Allow Multiple Connections for the Same IP Address */
@@ -7336,6 +7498,14 @@ namespace RevelationsStudios.RevCommServer {
 
                 /* Send All Incoming Direct Message Transmissions Back to the Sending Client */
                 bool.TryParse(GetConfigSetting("//settings/directmsg/sendback"), out boolSendDirectMsgBack);
+
+                /* Default Port for UPD Connections */
+                strSettingValue = GetConfigSetting("//settings/database/maxconnectionsperobject");
+            
+                if (strSettingValue != "" && int.TryParse(strSettingValue, out nSettingValue)) {
+            
+            	    nMaxDBConnectPerObj = nSettingValue;
+                }
                 
                 /* Have Client Use UDP Communcations with the Server */
                 bool.TryParse(GetConfigSetting("//settings/updclients/enabled"), out boolUseUDPClient);
@@ -7431,9 +7601,12 @@ namespace RevelationsStudios.RevCommServer {
 
                 /* Get Server's SSL Certification Name If Set */
                 strSSLCertName = GetConfigSetting("//settings/ssl/certificatename");
-			
-			    /* Get If Log Should be Used, and Where it Should be Created */
-			    bool.TryParse(GetConfigSetting("//settings/logging/enabled"), out boolUseLogFile);
+
+                /* Get Name of Private Key for Server's SSL Certification If Set */
+                strSSLPrivKeyName = GetConfigSetting("//settings/ssl/privatekeyname");
+
+                /* Get If Log Should be Used, and Where it Should be Created */
+                bool.TryParse(GetConfigSetting("//settings/logging/enabled"), out boolUseLogFile);
 
                 strSettingValue = GetConfigSetting("//settings/logfolderpath");
             
@@ -7866,6 +8039,17 @@ namespace RevelationsStudios.RevCommServer {
                 return nDefaultHTTPPort;                                  		
             }
         }
+        
+		/// <summary>
+		/// 	Gets Access Default HTTP SSL Port 
+		/// </summary>
+        public int DefaultHTTPSSLPort {
+        
+        	get {
+
+                return nDefaultHTTPSSLPort;                                  		
+            }
+        }
 
         /// <summary>
         /// 	Gets Indicator to Allow Multiple Connections from the Same IP Address
@@ -8144,6 +8328,17 @@ namespace RevelationsStudios.RevCommServer {
         }
 
         /// <summary>
+        ///     Gets Maximum Number of Database Connections an Objects Can Have
+        /// </summary>
+        public int DBMaxConnectPerObj { 
+        
+            get {
+
+                return nMaxDBConnectPerObj;
+            }
+        }
+
+        /// <summary>
         ///     Gets Indicator to Use UDP Communications for Clients
         /// </summary>
         public bool UseUDPClients { 
@@ -8273,6 +8468,18 @@ namespace RevelationsStudios.RevCommServer {
         	get {
                   
 				return strSSLCertName;                                  		
+            }
+        }
+        
+
+		/// <summary>
+		/// 	Gets Name of Private Key for Server's SSL Certification
+		/// </summary>
+        public string SSLPrivKeyName {
+        
+        	get {
+                  
+				return strSSLPrivKeyName;                                  		
             }
         }
 

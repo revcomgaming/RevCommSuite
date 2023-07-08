@@ -3,9 +3,13 @@
 EXPORTS 		
 
 	Activate
+	ActivateUsingSSL
 	ActivateByHostPort
+	ActivateByHostPortUsingSSL
 	ActivateWithServer
+	ActivateWithServerUsingSSL
 	ActivateWithServerByPort
+	ActivateWithServerByPortUsingSSL
 	StartPeerToPeerServer
 	StartPeerToPeerServerEncryptedWithKeys
 	StartPeerToPeerConnect

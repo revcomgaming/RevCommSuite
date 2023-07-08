@@ -2,7 +2,7 @@
 
  MIT License
 
- Copyright (c) 2023 RevComGaming
+ Copyright (c) 2022 Bigman
 
  Permission is hereby granted, free of charge, to any person obtaining a copy
  of this software and associated documentation files (the "Software"), to deal
@@ -321,6 +321,10 @@ var COMM = {
 
 			LOGGER.Log('Client web worker was already setup.');
 		}
+	},
+	ConnectWithSSL: function(strHostNameIP, nPort) {
+		
+		this.Connect(strHostNameIP, nPort, true);
 	},
 	StartPeerToPeerServer: function(strHostNameIP, nPort, strEncryptKey, strEncryptIV) {
 		

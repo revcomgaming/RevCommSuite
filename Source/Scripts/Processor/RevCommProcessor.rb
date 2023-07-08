@@ -215,6 +215,7 @@ module RevCommProcessor
           @fAutoRetLimitInMillis = 1000  # Automated Retrieval for HTTP Transmission or Data Process Time Limit in Milliseconds
           @boolAutoRetProcessCmd = false # Indicator to Process Automated Retrieval Client Messages
           @boolAutoRetEndTrans = false   # Indicator to Close HTTP Transmission or Delete Data Process After Automated Retrieval  
+          @boolSSLConnect = false        # Indicator to Connect to Server Using SSL
           @boolDebug = false             # Indicator To Do Debugging
      
           # Processes Incoming Communications 
@@ -559,156 +560,210 @@ module RevCommProcessor
           
      public
      
-        def self.Connect(strHostNameIP = '', nPort = 0, boolStartServer = false)
+        def self.Connect(strHostNameIP = '', nPort = 0, boolStartServer = false, strSSLPrivKeyName = "")
               
               boolConnected = IsConnected()
                                   # Indicator That Client Server Connection was Made
             
               begin
+
+                  if @boolSSLConnect == false || (@boolSSLConnect == true && strSSLPrivKeyName != "")
                   
-                  if boolConnected == false 
-                
-                        # If Not Starting the Server Before Connecting to it
-                        if boolStartServer == false
-                            
-                            # If No Hostname or IP Address was Set, Connect with Default Settings
-                            if strHostNameIP == '' 
-                              
-                                  if Win32API.new('RevCommClient32', 'Activate', 'V', 'I').call() == 1
-                                    
-                                      boolConnected = true
-                                    
-                                  else 
-                                    
-                                      Log('Connecting client to server using default settings failed.', true)
-                                    
-                                  end
-                                  
-                            elsif nPort != 0
-                  
-                                  # Else Connect with Sent Settings
-                                  if Win32API.new('RevCommClient32', 'ActivateByHostPort', 'PI', 'I').call(strHostNameIP, nPort) == 1
-                                    
-                                      boolConnected = true
-                                    
-                                  else
-                                    
-                                      Log('Connecting client to server using host, "' + strHostNameIP + '", port: ' + nPort.to_s() + ' failed.', true)
-                                    
-                                  end
-                              
-                            else
-                              
-                                  Log('Can not connect client to server using host due to invalid settings.', true)
-              
-                            end
-                            
-                        elsif nPort != 0
-                            
-                            # If No Default Settings were Sent, Start Server and Connect to it Using Default Settings
-                            if Win32API.new('RevCommClient32', 'ActivateWithServer', 'V', 'I').call() == 1
-                              
-                                  boolConnected = true
-                                  
-                            else
-                                  
-                                  Log('Starting server and connecting client to it failed.', true)
-                                                        
-                            end
-                            
-                        elsif Win32API.new('RevCommClient32', 'ActivateWithServerByPort', 'I', 'I').call(nPort) == 1
-                                  
-                            # If Port was Set, Start Server on That Port and Connect Locally
-                            boolConnected = true
-                                  
-                        else
-              
-                            Log('Starting server and connecting client to it using port: ' + nPort.to_s() + ' failed.', true)
-                            
-                        end                         
-        
-                        # If Client and Server Connection was Made, 
-                        # Start up Threads for Sending and Receiving from Server and 
-                        # Listen for "Peer To Peer" Connections
-                        if boolConnected == true
-        
-                            if @thdCommunicate == nil
-                                  
-                                  @thdCommunicate = Thread.new {
-                            
-                                      w32Communicate = Win32API.new('RevCommClient32', 'Communicate', 'V', 'V')
-                                            # Receives and Sends Waiting Message from Server
-                                      strDebugMsg = ""
-                                            # Debug Message
-                                      strResponseMsg = ''         
-                                                  # Returned Direct Message from Server    
-                                                                    
-                                      while RevCommProcessor.IsConnected() == true do
-                                                                          
-                                            w32Communicate.call()
-                                            RevCommProcessor.ManageDataMapVars()
-                                            RevCommProcessor.GetLogError()
-                                            RevCommProcessor.GetDisplayError()
-                                            
-                                            if RevCommProcessor.DebugMode() == true
+                       if boolConnected == false 
+                     
+                             # If Not Starting the Server Before Connecting to it
+                             if boolStartServer == false
+                                 
+                                 # If No Hostname or IP Address was Set, Connect with Default Settings
+                                 if strHostNameIP == '' 
+                                   
+                                       if @boolSSLConnect == true
+
+                                            if Win32API.new('RevCommClient32', 'ActivateUsingSSL', 'P', 'I').call(strSSLPrivKeyName) == 1
+                                         
+                                                boolConnected = true
                                               
-                                                strDebugMsg = RevCommProcessor.Debug()
-                                                
-                                                if strDebugMsg != ""
-                                                    
-                                                      RevCommProcessor.Log(strDebugMsg)
-                                                end
+                                            else 
+                                              
+                                                Log('Connecting client to server using default settings and SSL failed.', true)
+                                              
                                             end
-                                           
-                                            if RevCommProcessor.AutoRetProcessCmd() == true && 
-                                               RevCommProcessor.RunAutoDirectMsgByDesign() == false
-                                                
-                                               RevCommProcessor.GetDirectMsgNext(true)
-                                            end
-                                            
-                                            RevCommProcessor.RunAutoRetCleanup()
-                                            RevCommProcessor.HashUpdate()
-                                            
-                                            sleep(0.1)
-                                      end
-                                  }
-                            end
-                            
-                            if @thdPeerToPeerCommunicate == nil
-                                  
-                                  @thdPeerToPeerCommunicate = Thread.new {
 
-                                      w32PeerToPeerCommunicate = Win32API.new('RevCommClient32', 'PeerToPeerCommunicate', 'V', 'V')
-                                            # Receives and Sends Waiting Message to "Peer To Peer" Clients
-                                      strDebugMsg = ""
-                                            # Debug Message
-                                                                    
-                                      while RevCommProcessor.IsConnected() == true do
-                                                                          
-                                            w32PeerToPeerCommunicate.call()
-                                            RevCommProcessor.GetLogError()
-                                            RevCommProcessor.GetDisplayError()
+                                       elsif Win32API.new('RevCommClient32', 'Activate', 'V', 'I').call() == 1
+                                              
+                                           boolConnected = true
+                                         
+                                       else 
+                                         
+                                           Log('Connecting client to server using default settings failed.', true)
+                                         
+                                       end
+                                       
+                                 elsif nPort != 0
+                                   
+                                       if @boolSSLConnect == true
 
-                                            if RevCommProcessor.DebugMode() == true
-                                                
-                                                strDebugMsg = RevCommProcessor.Debug()
-                                                
-                                                if strDebugMsg != ""
-                                                    
-                                                      RevCommProcessor.Log(strDebugMsg)
-                                                end
+                                            if Win32API.new('RevCommClient32', 'ActivateByHostPortUsingSSL', 'PIP', 'I').call(strHostNameIP, nPort, strSSLPrivKeyName) == 1
+                                              
+                                                boolConnected = true
+                                              
+                                            else
+                                              
+                                                Log('Connecting client to server using host, "' + strHostNameIP + '", port: ' + nPort.to_s() + ' and SSL failed.', true)
+                                              
                                             end
+                       
+                                       elsif Win32API.new('RevCommClient32', 'ActivateByHostPort', 'PI', 'I').call(strHostNameIP, nPort) == 1
+                                         
+                                           boolConnected = true
+                                         
+                                       else
+                                         
+                                           Log('Connecting client to server using host, "' + strHostNameIP + '", port: ' + nPort.to_s() + ' failed.', true)
+                                         
+                                       end
+                                   
+                                 else
+                                   
+                                       Log('Can not connect client to server using host due to invalid settings.', true)
+                   
+                                 end
+                                 
+                             elsif nPort != 0
+                                 
+                                   
+                                 if @boolSSLConnect == true
+
+                                      if Win32API.new('RevCommClient32', 'ActivateWithServerUsingSSL', 'P', 'I').call(strSSLPrivKeyName) == 1
+                                        
+                                            boolConnected = true
                                             
-                                            sleep(0.1)
+                                      else
+                                            
+                                            Log('Starting server and connecting client to it using SSL failed.', true)
+                                                                  
                                       end
-                                  }
-                                  
-                            end
-                        end
+
+                                 elsif Win32API.new('RevCommClient32', 'ActivateWithServer', 'V', 'I').call() == 1
+                                   
+                                       boolConnected = true
+                                       
+                                 else
+                                       
+                                       Log('Starting server and connecting client to it failed.', true)
+                                                             
+                                 end
+                                 
+                             elsif @boolSSLConnect == true 
+
+                                  if Win32API.new('RevCommClient32', 'ActivateWithServerByPortUsingSSL', 'IP', 'I').call(nPort, strSSLPrivKeyName) == 1
+                                            
+                                      # If Port was Set, Start Server on That Port and Connect Locally
+                                      boolConnected = true
+                                            
+                                  else
                         
-                        ObjectSpace.define_finalizer(self, proc { |nObjectID| Disconnect() })
-                            
-                  end
+                                      Log('Starting server and connecting client to it using port: ' + nPort.to_s() + ' and SSL failed.', true)
+                                      
+                                  end 
+                                 
+                             elsif Win32API.new('RevCommClient32', 'ActivateWithServerByPort', 'I', 'I').call(nPort) == 1
+                                       
+                                 # If Port was Set, Start Server on That Port and Connect Locally
+                                 boolConnected = true
+                                       
+                             else
+                   
+                                 Log('Starting server and connecting client to it using port: ' + nPort.to_s() + ' failed.', true)
+                                 
+                             end                         
+             
+                             # If Client and Server Connection was Made, 
+                             # Start up Threads for Sending and Receiving from Server and 
+                             # Listen for "Peer To Peer" Connections
+                             if boolConnected == true
+             
+                                 if @thdCommunicate == nil
+                                       
+                                       @thdCommunicate = Thread.new {
+                                 
+                                           w32Communicate = Win32API.new('RevCommClient32', 'Communicate', 'V', 'V')
+                                                 # Receives and Sends Waiting Message from Server
+                                           strDebugMsg = ""
+                                                 # Debug Message
+                                           strResponseMsg = ''         
+                                                       # Returned Direct Message from Server    
+                                                                         
+                                           while RevCommProcessor.IsConnected() == true do
+                                                                               
+                                                 w32Communicate.call()
+                                                 RevCommProcessor.ManageDataMapVars()
+                                                 RevCommProcessor.GetLogError()
+                                                 RevCommProcessor.GetDisplayError()
+                                                 
+                                                 if RevCommProcessor.DebugMode() == true
+                                                   
+                                                     strDebugMsg = RevCommProcessor.Debug()
+                                                     
+                                                     if strDebugMsg != ""
+                                                         
+                                                           RevCommProcessor.Log(strDebugMsg)
+                                                     end
+                                                 end
+                                                
+                                                 if RevCommProcessor.AutoRetProcessCmd() == true && 
+                                                    RevCommProcessor.RunAutoDirectMsgByDesign() == false
+                                                     
+                                                    RevCommProcessor.GetDirectMsgNext(true)
+                                                 end
+                                                 
+                                                 RevCommProcessor.RunAutoRetCleanup()
+                                                 RevCommProcessor.HashUpdate()
+                                                 
+                                                 sleep(0.1)
+                                           end
+                                       }
+                                 end
+                                 
+                                 if @thdPeerToPeerCommunicate == nil
+                                       
+                                       @thdPeerToPeerCommunicate = Thread.new {
+
+                                           w32PeerToPeerCommunicate = Win32API.new('RevCommClient32', 'PeerToPeerCommunicate', 'V', 'V')
+                                                 # Receives and Sends Waiting Message to "Peer To Peer" Clients
+                                           strDebugMsg = ""
+                                                 # Debug Message
+                                                                         
+                                           while RevCommProcessor.IsConnected() == true do
+                                                                               
+                                                 w32PeerToPeerCommunicate.call()
+                                                 RevCommProcessor.GetLogError()
+                                                 RevCommProcessor.GetDisplayError()
+
+                                                 if RevCommProcessor.DebugMode() == true
+                                                     
+                                                     strDebugMsg = RevCommProcessor.Debug()
+                                                     
+                                                     if strDebugMsg != ""
+                                                         
+                                                           RevCommProcessor.Log(strDebugMsg)
+                                                     end
+                                                 end
+                                                 
+                                                 sleep(0.1)
+                                           end
+                                       }
+                                       
+                                 end
+                             end
+                             
+                             ObjectSpace.define_finalizer(self, proc { |nObjectID| Disconnect() })
+                                 
+                       end
+                    else
+
+                         Log('Connecting client to server failed. Error: SSL connection\'s private key file name not set.', true)
+                    end
                   
                   return boolConnected
               
@@ -718,6 +773,12 @@ module RevCommProcessor
                             
               end
           
+        end
+
+        def self.ConnectWithSSL(strSSLPrivKeyName, strHostNameIP = '', nPort = 0, boolStartServer = false)
+
+          @boolSSLConnect = true 
+          return Connect(strHostNameIP, nPort, boolStartServer, strSSLPrivKeyName)
         end
         
         # Starts "Peer To Peer" Server with Optional Encryption
@@ -865,10 +926,10 @@ module RevCommProcessor
                              
                              if nPort != 0
                              
-                                 @w32StartHTTPGetAsyncWithHostPort.call(nNewTransID, strHostNameIP, nPort)
+                                 @w32StartHTTPGetASyncWithHostPort.call(nNewTransID, strHostNameIP, nPort)
                              else
                                  
-                                 @w32StartHTTPGetAsyncWithHost.call(nNewTransID, strHostNameIP)
+                                 @w32StartHTTPGetASyncWithHost.call(nNewTransID, strHostNameIP)
                                  
                              end
                              
@@ -1984,7 +2045,7 @@ module RevCommProcessor
         # Adds HTTP Transmission's Variable and Value Pair for Sending to Destination Page Associated with Transmission ID
         def self.AddHTTPMsgData(nTransID, strVariableName, strValue)
               
-              @w32AddHTTPMsgData.call(nTransID, strVariableName, strValue)
+              @w32AddHTTPMsgData.call(nTransID, strVariableName, strValue.to_s)
         end
     
         # Clears HTTP Transmission's Variable and Value Pairs for Sending to Destination Page Associated with Transmission ID

@@ -2,7 +2,7 @@
 
  MIT License
 
- Copyright (c) 2023 RevComGaming
+ Copyright (c) 2022 Bigman
 
  Permission is hereby granted, free of charge, to any person obtaining a copy
  of this software and associated documentation files (the "Software"), to deal
@@ -26,7 +26,6 @@ var CLIENT = {
 
 	SERVERURL: 'localhost',			/* Default Server URL */
 	SERVERPORT: 59234,				/* Default Server Port */
-	SERVERSSLPORT: 59235,			/* Default Server SSL Port */
     ENCRYPTKEYSIZE: 32,            	/* Size of Encryption Key */
     ENCRYPTIVBLOCKSIZE: 16,        	/* Size of Encryption IV Block */
 	strMsgPartIndicate: '!*+#',		/* Message Part Starting Indicator */
@@ -72,24 +71,19 @@ var CLIENT = {
 		
 		var strURL,						/* Connection URL */
 			wsServerSetup;				/* Web Socket for Setting up Connection */
+			
+		if (!Number.isInteger(nPort)) {
+
+			nPort = this.SERVERPORT;
+		}
 
 		if (boolSetUseSSL || this.boolUseSSL) {
 			
 			strURL = 'wss://';
-			
-			if (!Number.isInteger(nPort)) {
-
-				nPort = this.SERVERSSLPORT;
-			}
 		}
 		else {
 			
 			strURL = 'ws://';
-			
-			if (!Number.isInteger(nPort)) {
-
-				nPort = this.SERVERPORT;
-			}
 		}
 		
 		if (typeof(strHostNameIP) == 'string' && strHostNameIP != '') {

@@ -214,8 +214,9 @@ RevCommClient - Connector for RevCommServer and peer to peer communications
 #include <time.h>
 #include <exception>
 
+#include <openssl/bio.h>
 #include <openssl/ssl.h>
-#include <openssl/evp.h>
+#include <openssl/err.h>
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -293,7 +294,6 @@ class PeerToPeerClientInfo {
 			* pcharDecryptIV,
 			* pcharLeftOverMsgPart;
 		int nLeftOverMsgLen;
-		HINSTANCE hiCryptoDLL;			/* Instance of OpenSSL "libCrypto" DLL */
 		bool boolHasEncryptInfo,
 			 boolIsNegotiating,
 			 boolIsANegotiation,
@@ -335,7 +335,6 @@ class PeerToPeerClientInfo {
 		PeerToPeerClientInfo(SOCKET socSetClient, 
 							 string strSetHomeIPAddress = "", 
 							 string strSetPeerIPAddress = "", 
-							 HINSTANCE hiSetCryptoDLL = NULL, 
 							 char* pcharSetEncryptKey = NULL, 
 							 char* pcharSetEncryptIV = NULL, 
 							 char* pcharSetDecryptKey = NULL, 
@@ -386,8 +385,10 @@ struct ClientServerInfo {
 					 MSGLENSIZE = 10,
 									/* Length of Message Size Numbers */
 					 ENCRYPTKEYSIZE = 32,
-					 ENCRYPTIVSIZE = 16; 
+					 ENCRYPTIVSIZE = 16,
 									/* Size of Encryption Key and IV Block */
+					 SSLCHECKTIMEOUTINMILLIS = 100;
+									/* Amount of Time to Wait for SSL Socket to be Available */
 	
 	ClientServerInfo() {
 
@@ -430,18 +431,16 @@ struct ClientServerInfo {
 
 		pcharServerHostNameIP = (char*)string("localhost").c_str();
 		nServerPort = 59234;
-		nServerSSLPort = 59235;
 		boolNotServerSet = true;
 		socServerConn = NULL;
 		socUDPConn = NULL;
+		pbioSecureCon = NULL;
+		pbioSecureUDPCon = NULL;
+		pcharSSLClientKeyName = NULL;
 		nUDPInfoSize = 0;
-		hiSSLDLL = NULL;
 		psctxAccessor = NULL;
 		psctxUDPAccess = NULL;
-		psslServerSecureConn = NULL;
-		psslUDPSecureConn = NULL;	
-		socPeerToPeer = NULL;
-		hiCryptoDLL = NULL;			
+		socPeerToPeer = NULL;	
 		boolPeerToPeerEncrypt = false;	
 		pcharPeerToPeerDecryptKey = NULL;
 		pcharPeerToPeerDecryptIV = NULL;
@@ -458,21 +457,16 @@ struct ClientServerInfo {
 		return Connect((char *)string("").c_str(), 0, 0, boolSetUseSSL);
 	}
 
-	bool Connect(char* pSetServerHostNameIP, int nSetServerPort, int nSetServerSSLPort, bool boolSetUseSSL) {
+	bool Connect(const char* pSetServerHostNameIP, int nSetServerPort, int nSetServerSSLPort, bool boolSetUseSSL) {
 
 		WSADATA wsdWSAInfo;				/* Information Returned from WSA Setup */
 		addrinfo* paiList = NULL,
 				* paiSelected = NULL,
 				aiInfo;					/* List of Host Addresses, Information on Finding Those Addresses, and
 										   Holder for Selected Information */
-		int nPortSelected = 0;			/* Selected Port for Normal or SSL */
 		bool boolConnectStarted = false;/* Indicator That Connection was Started */
 		u_long ulMode = 1;				/* Mode for Turning on Non-Blocking in Socket */
 		const char charNoDelay = '1';	/* Setting for "No Delay" Option */
-//		typedef void (*DLLFUNCERROR)(void);	
-										/* Type of OpenSSL Dynamic Error Strings Function */
-//		typedef int (*DLLFUNCINIT)(uint64_t, const OPENSSL_INIT_SETTINGS *);
-										/* Type of OpenSSL Dynamic Initialization Function */
 
 		try {
 
@@ -486,126 +480,85 @@ struct ClientServerInfo {
 
 				if (boolNotServerSet) {
 
-					pcharServerHostNameIP = pSetServerHostNameIP;
+					pcharServerHostNameIP = (char *)pSetServerHostNameIP;
 					nServerPort = nSetServerPort;
-					nServerSSLPort = nSetServerSSLPort;
 					boolUseSSL = boolSetUseSSL;
 					boolNotServerSet = false;
 				}
 
 				if (WSAStartup(MAKEWORD(2, 2), &wsdWSAInfo) == 0) {
 
-					ZeroMemory(&aiInfo, sizeof(aiInfo));
+					if (boolSetUseSSL) {
 
-					aiInfo.ai_family = AF_UNSPEC;
-					aiInfo.ai_socktype = SOCK_STREAM;
-					aiInfo.ai_protocol = IPPROTO_TCP;
-
-					if (!boolUseSSL) {
-				
-						nPortSelected = nServerPort;
+						psctxAccessor = SSL_CTX_new(TLS_client_method());
+						boolConnectStarted = boolConnected = (pbioSecureCon = ConnectSecure(pcharServerHostNameIP,
+																 							IntToString(nSetServerPort),
+																							psctxAccessor)) != NULL;
 					}
 					else {
-				
-						nPortSelected = nServerSSLPort;
-					}
 
-					if (getaddrinfo(pcharServerHostNameIP, (char *)IntToString(nPortSelected).c_str(), &aiInfo, &paiList) == 0) {
-	
-						paiSelected = paiList;
+						ZeroMemory(&aiInfo, sizeof(aiInfo));
 
-						if (paiSelected == NULL) {
-					
-							AddLogErrorMsg("During client-server connection for server, getting host address list information failed.");
-						}
+						aiInfo.ai_family = AF_UNSPEC;
+						aiInfo.ai_socktype = SOCK_STREAM;
+						aiInfo.ai_protocol = IPPROTO_TCP;
 
-						while (paiSelected != NULL) {
-				 
-							socServerConn = socket(paiSelected -> ai_family, 
-												   paiSelected -> ai_socktype, 
-												   paiSelected -> ai_protocol);
+						if (getaddrinfo(pcharServerHostNameIP, (char*)IntToString(nServerPort).c_str(), &aiInfo, &paiList) == 0) {
 
-							if (socServerConn != INVALID_SOCKET) {
+							paiSelected = paiList;
 
-								setsockopt(socServerConn, IPPROTO_TCP, TCP_NODELAY, &charNoDelay, sizeof(charNoDelay));
-						
-								if (connect(socServerConn, paiSelected -> ai_addr, paiSelected -> ai_addrlen) == 0) {
+							if (paiSelected == NULL) {
 
-									if (ioctlsocket(socServerConn, FIONBIO, &ulMode) != 0) {
-									
-										AddLogErrorMsg("During client-server connection for server, setting non-blocking on socket failed. WSA error code: " + IntToString(WSAGetLastError()) + ".");
-									}
+								AddLogErrorMsg("During client-server connection for server, getting host address list information failed.");
+							}
 
-									paiSelected = NULL;
-									boolConnectStarted = true;
-									boolConnected = true;
+							while (paiSelected != NULL) {
 
-									if (boolUseSSL) {
+								socServerConn = socket(paiSelected->ai_family,
+													   paiSelected->ai_socktype,
+													   paiSelected->ai_protocol);
 
-										typedef void (*DLLFUNCERROR)(void);	
-										typedef int (*DLLFUNCINIT)(uint64_t, const OPENSSL_INIT_SETTINGS *);	
-										
-										#ifdef WIN32
+								if (socServerConn != INVALID_SOCKET) {
 
-											hiSSLDLL = LoadLibrary(TEXT("libssl-3.dll"));
-										#else
+									setsockopt(socServerConn, IPPROTO_TCP, TCP_NODELAY, &charNoDelay, sizeof(charNoDelay));
 
-											hiSSLDLL = LoadLibrary(TEXT("libssl-3-x64.dll"));
-										#endif
+									if (connect(socServerConn, paiSelected->ai_addr, paiSelected->ai_addrlen) == 0) {
 
-										if (hiSSLDLL != NULL) {
+										if (ioctlsocket(socServerConn, FIONBIO, &ulMode) != 0) {
 
-											/* OpenSSL Dynamic Error Strings Function */
-											((DLLFUNCERROR)GetProcAddress(hiSSLDLL, "SSL_load_error_strings"))();
-
-											/* OpenSSL Dynamic Initialization Function */
-											((DLLFUNCINIT)GetProcAddress(hiSSLDLL, "OPENSSL_init_ssl"))(0, NULL);
-
-											boolConnectStarted = boolConnected = ConnectSecure(psctxAccessor, 
-																							   psslServerSecureConn,
-																							   "TLSv1_2_client_method",
-																							   socServerConn);
+											AddLogErrorMsg("During client-server connection for server, setting non-blocking on socket failed. WSA error code: " + IntToString(WSAGetLastError()) + ".");
 										}
-										else {
 
-											#ifdef WIN32
+										paiSelected = NULL;
+										boolConnectStarted = true;
+										boolConnected = true;
 
-												AddLogErrorMsg("During client-server connection for server, accessing 'libssl-3.dll' failed.");
-											#else
+										if (!AddSendMsg("GETSTREAMFILELIST")) {
 
-												AddLogErrorMsg("During client-server connection for server, accessing 'libssl-3-x64.dll' failed.");
-											#endif
-											
-											boolConnectStarted = false;
-											boolConnected = false;
+											csiOpInfo.AddLogErrorMsg("During client-server connection for server, sending message 'GETSTREAMFILELIST' failed.");
 										}
 									}
+									else {
 
-									if (boolConnected && !AddSendMsg("GETSTREAMFILELIST")) {
+										paiSelected = paiSelected->ai_next;
 
-										csiOpInfo.AddLogErrorMsg("During client-server connection for server, sending message 'GETSTREAMFILELIST' failed.");
+										AddLogErrorMsg("During client-server connection for server, connecting to server failed. WSA error code: " + IntToString(WSAGetLastError()) + ".");
+										closesocket(socServerConn);
+										socServerConn = NULL;
 									}
 								}
 								else {
 
-									paiSelected = paiSelected -> ai_next;
-							
-									AddLogErrorMsg("During client-server connection for server, connecting to server failed. WSA error code: " + IntToString(WSAGetLastError()) + ".");
-									closesocket(socServerConn);
+									paiSelected = paiSelected->ai_next;
 									socServerConn = NULL;
+									AddLogErrorMsg("During client-server connection for server, setting up setting up socket for connecting to server failed, connecting to server failed. WSA error code: " + IntToString(WSAGetLastError()) + ".");
 								}
 							}
-							else {
-							
-								paiSelected = paiSelected -> ai_next;
-								socServerConn = NULL;
-								AddLogErrorMsg("During client-server connection for server, setting up setting up socket for connecting to server failed, connecting to server failed. WSA error code: " + IntToString(WSAGetLastError()) + ".");
-							}
 						}
-					}	
-					else {
-					
-						AddLogErrorMsg("During client-server connection for server, getting possible address information failed.");
+						else {
+
+							AddLogErrorMsg("During client-server connection for server, getting possible address information failed.");
+						}
 					}
 				}
 				else {
@@ -649,13 +602,17 @@ struct ClientServerInfo {
 										/* Buffer for Receiving Message */
 //		     acharUDPMsg[nUDPMaxSize + 1];
 										/* Buffer for Receiving UDP Messages */
-		    nQueueCount = DebugReceivedQueueCount(),
+			nQueueCount = DebugReceivedQueueCount(),
 										/* Queue Count */
 			nSendErrorCode = 0;			/* Send Error Code */
-		
+		pollfd apfdSSLReadCheck[1];		/* Struct Used for Read Ready SSL Socket */
+		int nSSLReadCheckResp = 0;		/* Response to SSL Socket Read Check */
+
+		apfdSSLReadCheck[0].events = POLLIN;
+	
 		try {
 
-			if (socServerConn != NULL) {
+			if (socServerConn != NULL || pbioSecureCon != NULL) {
 
 				if (boolRunConnection) {
 
@@ -669,24 +626,58 @@ struct ClientServerInfo {
 						char acharMsgReceived[BUFFERSIZE + 1];
 						memset(acharMsgReceived, MSGFILLERCHAR, BUFFERSIZE + 1);
 					
-						nReceivedAmount = recv(socServerConn, acharMsgReceived, BUFFERSIZE, 0);
+						if (boolUseSSL) {
+
+							apfdSSLReadCheck[0].fd = BIO_get_fd(pbioSecureCon, NULL);
+
+							nSSLReadCheckResp = WSAPoll(apfdSSLReadCheck, 1, SSLCHECKTIMEOUTINMILLIS);
+							
+							if (nSSLReadCheckResp > 0) {
+
+								nReceivedAmount = BIO_read(pbioSecureCon, acharMsgReceived, BUFFERSIZE);
+							}
+							else {
+
+								nReceivedAmount = 0;
+							}
+						}
+						else {
+
+							nReceivedAmount = recv(socServerConn, acharMsgReceived, BUFFERSIZE, 0);
+						}
 
 						nSendErrorCode = WSAGetLastError();
-						
-						/* If Message Comes from UDP Connection, Add to TCP Message If it Exists */
-						if (socUDPConn != NULL && 
-							(nSendErrorCode == 0 || 
-							 nSendErrorCode == WSAEWOULDBLOCK)) {
+
+						if (boolUseSSL && pbioSecureUDPCon != NULL) {
+
+							apfdSSLReadCheck[0].fd = BIO_get_fd(pbioSecureUDPCon, NULL);
+
+							nSSLReadCheckResp = WSAPoll(apfdSSLReadCheck, 1, SSLCHECKTIMEOUTINMILLIS);
+
+							if (nSSLReadCheckResp > 0) {
+
+								nReceivedAmount = BIO_read(pbioSecureUDPCon, acharMsgReceived, BUFFERSIZE);
+							}
+							else {
+
+								nReceivedAmount = 0;
+							}
+						}
+						else if (socUDPConn != NULL && 
+								 (nSendErrorCode == 0 || 
+								  nSendErrorCode == WSAEWOULDBLOCK)) {
+
+							/* If Message Comes from UDP Connection, Add to TCP Message If it Exists */
 							
 							char acharUDPMsg[UDPBUFFERSIZE + 1];
 							memset(acharUDPMsg, MSGFILLERCHAR, UDPBUFFERSIZE + 1);
 					
 							nUDPAmount = recvfrom(socUDPConn, 
-												  acharUDPMsg, 
-												  UDPBUFFERSIZE, 
-												  0,
-												  psaiUDPInfo,
-												  &nUDPInfoSize);
+													acharUDPMsg, 
+													UDPBUFFERSIZE, 
+													0,
+													psaiUDPInfo,
+													&nUDPInfoSize);
 
 							nSendErrorCode = WSAGetLastError();
 
@@ -699,7 +690,7 @@ struct ClientServerInfo {
 							else if (nSendErrorCode != WSAEWOULDBLOCK && nSendErrorCode != 0) {
 
 								AddLogErrorMsg("During running server message sender and receiver, receiving message through UDP from server failed. Error code: " + 
-											   IntToString(nSendErrorCode));
+												IntToString(nSendErrorCode));
 							}
 						}
 
@@ -710,8 +701,17 @@ struct ClientServerInfo {
 							nQueueCount = DebugReceivedQueueCount();
 						}
 						else if (nSendErrorCode != WSAEWOULDBLOCK && nSendErrorCode != 0) {
+					
+							if (boolUseSSL) {
 
-							AddLogErrorMsg("During running server message sender and receiver, receiving message from server failed. Error code: " + IntToString(nSendErrorCode));
+								AddLogErrorMsg("During running server message sender and receiver, receiving message from server failed through SSL connection. Error code: " +
+												IntToString(nSendErrorCode));
+							}
+							else {
+
+								AddLogErrorMsg("During running server message sender and receiver, receiving message from server failed. Error code: " + IntToString(nSendErrorCode));
+							}
+
 							boolRunConnection = false;
 						}
 					}
@@ -940,7 +940,6 @@ struct ClientServerInfo {
 							ppciSelected -> SetNextClientInfo(new PeerToPeerClientInfo(socNewClient, 
 																					   strHomeIPAddress,
 																					   strPeerIPAddress,
-																					   hiCryptoDLL, 
 																					   pcharSetEncryptKey, 
 																					   pcharSetEncryptIV,
 																					   pcharPeerToPeerDecryptKey,
@@ -952,7 +951,6 @@ struct ClientServerInfo {
 							ppciListClients = new PeerToPeerClientInfo(socNewClient, 
 																	   strHomeIPAddress,
 																	   strPeerIPAddress,
-																	   hiCryptoDLL, 
 																	   pcharSetEncryptKey, 
 																	   pcharSetEncryptIV,
 																	   pcharPeerToPeerDecryptKey,
@@ -965,7 +963,6 @@ struct ClientServerInfo {
 						ppciPrevious -> StartNegotiation(new PeerToPeerClientInfo(socNewClient, 
 																				  strHomeIPAddress,
 																				  strPeerIPAddress,
-																				  hiCryptoDLL, 
 																				  pcharSetEncryptKey, 
 																				  pcharSetEncryptIV,
 																				  pcharPeerToPeerDecryptKey,
@@ -999,8 +996,15 @@ struct ClientServerInfo {
 			   * pmsiSelect = pmsiListBackupSent; 
 									/* Selected Message Information Record */
  // 		int nSeqReplayNum = 0,		/* Message Sequence Number for Start of Replay */
-		int nSendLength = 0;		/* Length of Total Message to Send */		
+		int nSendLen = 0;			/* Length of Total Message to Send */
 		char* pcharWholeSend = NULL;/* Total Message to be Sent */
+//		bool boolNoError = true;	/* Indicator That There was Not a Valid Error */
+		int nUDPPartLen = 0,		/* Length of Part of Message Being Sent Using UDP */
+			nSendErrorCode = 0,		/* Error Code from Sends */
+			nCounter = 0;			/* Counter for Loop */
+		pollfd apfdSSLWriteCheck[1];/* Struct Used for Write Ready SSL Socket */
+		int nSSLWriteCheckResp = 0;	/* Response to SSL Socket Write Check */
+		string strErrorMsg = "";	/* Error Message */
 
 		try {
 
@@ -1014,24 +1018,103 @@ struct ClientServerInfo {
 					
 						if (pcharWholeSend != NULL) {
 						
-							pcharWholeSend = MsgInfo::AppendString(pcharWholeSend, BUFFERSIZE * nSendLength, pmsiSelect -> GetMsgArray(), BUFFERSIZE);
+							pcharWholeSend = MsgInfo::AppendString(pcharWholeSend, nSendLen, pmsiSelect -> GetMsgArray(), pmsiSelect -> Length());
 						}
 						else {
 						
 							pcharWholeSend = pmsiSelect -> GetMsgArray();
 						}
 						
-						nSendLength++;
+						nSendLen += pmsiSelect->Length();
 					}
 
 					pmsiSelect = pmsiSelect -> GetNextMsgInfo();
 				}
 
-				if (nSendLength > 0) {
+				if (nSendLen > 0) {
 
-					if (send(socServerConn, pcharWholeSend, BUFFERSIZE * nSendLength, 0) == SOCKET_ERROR) {
+					apfdSSLWriteCheck[0].events = POLLOUT;
 
-						AddLogErrorMsg("During sending replay messages, send replay messages failed.");
+					if (socUDPConn == NULL) {
+
+						if (boolUseSSL) {
+
+							apfdSSLWriteCheck[0].fd = BIO_get_fd(pbioSecureCon, NULL);
+
+							nSSLWriteCheckResp = WSAPoll(apfdSSLWriteCheck, 1, SSLCHECKTIMEOUTINMILLIS);
+
+							if (nSSLWriteCheckResp > 0) {
+
+								if (BIO_write(pbioSecureCon, pcharWholeSend, nSendLen) <= 0) {
+
+									strErrorMsg = "During sending replay messages, send replay messages using SSL failed.";
+								}
+							}
+							else if (nSSLWriteCheckResp == SOCKET_ERROR) {
+
+								strErrorMsg = "During sending replay messages, socket error occurred.";
+							}
+						}
+						else if (send(socServerConn, pcharWholeSend, nSendLen, 0) == SOCKET_ERROR) {
+
+							strErrorMsg = "During sending replay messages, send replay messages failed.";
+						}
+					}
+					else if (boolUseSSL) {
+
+						apfdSSLWriteCheck[0].fd = BIO_get_fd(pbioSecureUDPCon, NULL);
+
+						nSSLWriteCheckResp = WSAPoll(apfdSSLWriteCheck, 1, SSLCHECKTIMEOUTINMILLIS);
+
+						if (nSSLWriteCheckResp > 0) {
+
+							if (BIO_write(pbioSecureUDPCon, pcharWholeSend, nSendLen) <= 0) {
+
+								strErrorMsg = "During sending replay messages, sending messages using UDP to server failed using SSL.";
+							}
+						}
+						else if (nSSLWriteCheckResp == SOCKET_ERROR) {
+
+							strErrorMsg = "During sending replay messages, socket error occurred using UDP and SSL.";
+						}
+					}
+					else {
+
+						bool boolNoError = true;
+
+						/* Else Do UDP Send, Break up Message into Smaller Peices for Send */
+						for (nCounter = 0; nCounter < nSendLen && boolNoError; nCounter += UDPBUFFERSIZE) {
+
+							if (nSendLen - nCounter >= UDPBUFFERSIZE) {
+
+								nUDPPartLen = UDPBUFFERSIZE;
+							}
+							else {
+
+								nUDPPartLen = nSendLen - nCounter;
+							}
+
+							if (sendto(socUDPConn,
+								pcharWholeSend + nCounter,
+								nUDPPartLen,
+								0,
+								psaiUDPInfo,
+								nUDPInfoSize) != nUDPPartLen) {
+
+								strErrorMsg = "During sending replay messages, sending messages using UDP to server failed.";
+								boolNoError = false;
+							}
+						}
+					}
+
+					if (strErrorMsg != "") {
+
+						nSendErrorCode = WSAGetLastError();
+
+						if (nSendErrorCode != WSAEWOULDBLOCK && nSendErrorCode != 0) {
+
+							AddLogErrorMsg(strErrorMsg + " Error code : " + IntToString(nSendErrorCode));
+						}
 					}
 				}
 				else {
@@ -1089,10 +1172,6 @@ struct ClientServerInfo {
 	   Returns: True If Server was Started, Else False If Not Started or Already Running */
 	bool StartPeerToPeerServerEncryptedWithKeys(string strIPAddress, int nPort, char* pcharKey, char* pcharIV) {
 	
-/*		typedef int (*DLLFUNCINIT)(const EVP_CIPHER *);		
-									/* OpenSSL AES Initialization Dynamic Type Function */
-/*		typedef const EVP_CIPHER * (*DLLFUNCCIPHER)(void);		
-									/* OpenSSL AES Cipher Setup Dynamic Type Function */
 		bool boolServerStarted = false;
 									/* Indicator That "Peer To Peer" Server was Started */
 					
@@ -1105,33 +1184,9 @@ struct ClientServerInfo {
 			PrepCharArrayOut(pcharKey, pcharPeerToPeerDecryptKey, ENCRYPTKEYSIZE, ENCRYPTKEYSIZE + 1);
 			PrepCharArrayOut(pcharIV, pcharPeerToPeerDecryptIV, ENCRYPTIVSIZE, ENCRYPTIVSIZE + 1);
 
-			typedef int (*DLLFUNCINIT)(const EVP_CIPHER *);		
-			typedef const EVP_CIPHER * (*DLLFUNCCIPHER)(void);
+			EVP_add_cipher(EVP_aes_256_cbc());
 
-			#ifdef WIN32
-
-				hiCryptoDLL = LoadLibrary(TEXT("libcrypto-3.dll"));
-			#else
-
-				hiCryptoDLL = LoadLibrary(TEXT("libcrypto-3-x64.dll"));
-			#endif
-
-			if (hiCryptoDLL != NULL) {
-
-				((DLLFUNCINIT)GetProcAddress(hiCryptoDLL, "EVP_add_cipher"))(((DLLFUNCCIPHER)GetProcAddress(hiCryptoDLL, "EVP_aes_256_cbc"))());
-
-				boolServerStarted = StartPeerToPeerServer(strIPAddress, nPort); 
-			}
-			else {
-
-				#ifdef WIN32
-					
-					AddLogErrorMsg("During setting up for 'Peer to Peer' encrypted connections, accessing 'libcrypto-3.dll' failed");
-				#else
-
-					AddLogErrorMsg("During setting up for 'Peer to Peer' encrypted connections, accessing 'libcrypto-3-x64.dll' failed");
-				#endif
-			}
+			boolServerStarted = StartPeerToPeerServer(strIPAddress, nPort); 
 		}
 
 		return boolServerStarted;
@@ -1217,7 +1272,6 @@ struct ClientServerInfo {
 								ppciSelected -> SetNextClientInfo(new PeerToPeerClientInfo(socServer, 
 																						   strHomeIPAddress,
 																						   strPeerToPeerServerIP, 
-																						   hiCryptoDLL, 
 																						   pcharEncryptKey, 
 																						   pcharEncryptIV, 
 																						   pcharPeerToPeerDecryptKey, 
@@ -1228,7 +1282,6 @@ struct ClientServerInfo {
 								ppciPrevious -> StartNegotiation(new PeerToPeerClientInfo(socServer, 
 																						  strHomeIPAddress,
 																						  strPeerToPeerServerIP, 
-																						  hiCryptoDLL, 
 																						  pcharEncryptKey, 
 																						  pcharEncryptIV, 
 																						  pcharPeerToPeerDecryptKey, 
@@ -1240,7 +1293,6 @@ struct ClientServerInfo {
 							ppciListClients = new PeerToPeerClientInfo(socServer, 
 																	   strHomeIPAddress,
 																	   strPeerToPeerServerIP, 
-																	   hiCryptoDLL, 
 																	   pcharEncryptKey, 
 																	   pcharEncryptIV, 
 																	   pcharPeerToPeerDecryptKey, 
@@ -2063,14 +2115,7 @@ struct ClientServerInfo {
 	/* Closes Client Server Connection */
 	void Close() {
 
-		MsgInfo* pmsiHolder = NULL;			/* Holder for Deleting Messages */		
-//		typedef int (*DLLFUNCSHUTDOWN)(SSL *);		
-											/* Type of OpenSSL SSL Shutdown Setup Dynamic Type Function */
-//		typedef void (*DLLFUNCFREE)(SSL *);	/* Type of OpenSSL Freeing SSL Resource Setup Dynamic Type Function */		
-//		typedef void (*DLLFUNCPROCFREE)(SSL_CTX *);	
-											/* Type of OpenSSL Freeing SSL Processor Setup Dynamic Type Function */	
-//		typedef void (*DLLFUNCPROCCLEAN)(void *, size_t);	
-											/* Type of OpenSSL Freeing SSL Processor Setup Dynamic Type Function */
+		MsgInfo* pmsiHolder = NULL;			/* Holder for Deleting Messages */	
 
 		try {
 
@@ -2078,38 +2123,24 @@ struct ClientServerInfo {
 
 			if (boolUseSSL) {
 
-				typedef int (*DLLFUNCSHUTDOWN)(SSL *);		
-				typedef void (*DLLFUNCFREE)(SSL *);	
-				typedef void (*DLLFUNCPROCFREE)(SSL_CTX *);		
-					
-				/* OpenSSL SSL Shutdown Setup Dynamic Type Function */
-				if (((DLLFUNCSHUTDOWN)GetProcAddress(hiSSLDLL, "SSL_shutdown"))(psslServerSecureConn) > 0) {
-					
-					/* OpenSSL Freeing SSL Resource Setup Dynamic Type Function */		
-					((DLLFUNCFREE)GetProcAddress(hiSSLDLL, "SSL_free"))(psslServerSecureConn);
+				if (psctxAccessor != NULL) {
 
-					/* OpenSSL Freeing SSL Processor Setup Dynamic Type Function */	
-					((DLLFUNCPROCFREE)GetProcAddress(hiSSLDLL, "SSL_CTX_free"))(psctxAccessor);
-				}
-				else {
-					
-					AddLogErrorMsg("During releasing SSL resources, freeing OpenSSL SSL resource failed.");
+					SSL_CTX_free(psctxAccessor);
 				}
 
-				if (socUDPConn != NULL) {
+				if (pbioSecureCon != NULL) {
 
-					if (((DLLFUNCSHUTDOWN)GetProcAddress(hiSSLDLL, "SSL_shutdown"))(psslUDPSecureConn) > 0) {
-					
-						/* OpenSSL Freeing SSL Resource Setup Dynamic Type Function */		
-						((DLLFUNCFREE)GetProcAddress(hiSSLDLL, "SSL_free"))(psslUDPSecureConn);
+					BIO_free_all(pbioSecureCon);
+				}
 
-						/* OpenSSL Freeing SSL Processor Setup Dynamic Type Function */	
-						((DLLFUNCPROCFREE)GetProcAddress(hiSSLDLL, "SSL_CTX_free"))(psctxUDPAccess);
-					}
-					else {
-					
-						AddLogErrorMsg("During releasing SSL resources, freeing OpenSSL SSL resource for UDP connection failed.");
-					}
+				if (psctxUDPAccess != NULL) {
+
+					SSL_CTX_free(psctxUDPAccess);
+				}
+
+				if (pbioSecureUDPCon != NULL) {
+
+					BIO_free_all(pbioSecureUDPCon);
 				}
 			}
 
@@ -2125,31 +2156,18 @@ struct ClientServerInfo {
 				closesocket(socUDPConn);
 			}
 					
-			if (hiCryptoDLL != NULL) {
+			if (pcharPeerToPeerDecryptKey != NULL && pcharPeerToPeerDecryptIV != NULL) {
 				
-				typedef void (*DLLFUNCPROCCLEAN)(void *, size_t);
-						
-				((DLLFUNCPROCCLEAN)GetProcAddress(hiCryptoDLL, "OPENSSL_cleanse"))(pcharPeerToPeerDecryptKey, ENCRYPTKEYSIZE);
-				((DLLFUNCPROCCLEAN)GetProcAddress(hiCryptoDLL, "OPENSSL_cleanse"))(pcharPeerToPeerDecryptIV, ENCRYPTIVSIZE);
-
-				if (!FreeLibrary(hiCryptoDLL)) {
-					
-					AddLogErrorMsg("During client shutdown, freeing OpenSSL libcrypto DLL failed.");
-				}
-			}
-
-			if (hiSSLDLL != NULL) {
-
-				if (!FreeLibrary(hiSSLDLL)) {
-					
-					AddLogErrorMsg("During client shutdown, freeing OpenSSL libSSL DLL failed.");
-				}
+				OPENSSL_cleanse(pcharPeerToPeerDecryptKey, ENCRYPTKEYSIZE);
+				OPENSSL_cleanse(pcharPeerToPeerDecryptIV, ENCRYPTIVSIZE);
 			}
 
 			boolInGroupSession = false;
 			boolGroupSessionHost = false;
 			boolRunConnection = false;
+
 			WSACleanup();
+
 			boolNotServerSet = true;
 			boolConnected = false;
 
@@ -2498,6 +2516,12 @@ struct ClientServerInfo {
 		}
 	}
 
+	/* Sets SSL Client File Name */
+	void SetSSLClientKeyName(char* pcharSetSSLClientKeyName) {
+
+		pcharSSLClientKeyName = pcharSetSSLClientKeyName;
+	}
+
 	HANDLE ThreadLocker() {
 	
 		return hmuxLock;
@@ -2652,19 +2676,18 @@ struct ClientServerInfo {
 	private: 
 
 		char* pcharServerHostNameIP;	/* Server Host Name or IP Address */
-		int nServerPort,				/* Port for Accessing Server */
-			nServerSSLPort;				/* Port for Accessing Server Using SSL */
+		int nServerPort;				/* Port for Accessing Server */
 		bool boolUseSSL,				/* Indicator to Use SSL */
 			 boolNotServerSet;			/* Indicator That Server Settings Have Not Been Set */
 		SOCKET socServerConn,			/* Server Connection */
 			   socUDPConn;				/* Alternative Server UDP Connection */
+		BIO *pbioSecureCon,				/* SSL Connection */
+			*pbioSecureUDPCon;			/* UDP SSL Connection */
+		char *pcharSSLClientKeyName;	/* SSL Client Key Name */
 		SOCKADDR* psaiUDPInfo;			/* UDP Connection Address Information */	
 		int nUDPInfoSize;				/* Size of UDP Connection Address Information */
-		HINSTANCE hiSSLDLL;				/* Instance of OpenSSL "libSSL" DLL */
 		SSL_CTX* psctxAccessor,			/* TLS/SSL Accessor for Connector */
 			   * psctxUDPAccess;		/* UDP DTLS Accessor for Connector */
-		SSL* psslServerSecureConn,		/* SSL Secure Server Connection */
-		   * psslUDPSecureConn;			/* UDP DTLS Server Connection */
 		string strMsgPartIndicate,
 			   strMsgStartIndicate,
 			   strMsgEndIndicate;		/* Indicator for Parts of Messages and
@@ -2686,7 +2709,6 @@ struct ClientServerInfo {
 			 boolPeerToPeerServer;		/* Indicator That "Peer To Peer" Server is Up */		
 		string strPeerToPeerIP;			/* IP Address for Client "Peer To Peer" Server */
 		int nPeerToPeerPort;			/* Default Port for Client "Peer To Peer" Server */
-		HINSTANCE hiCryptoDLL;			/* Instance of OpenSSL "libCrypto" DLL */
 		bool boolPeerToPeerEncrypt;		/* Indicator to Encrypt Client "Peer To Peer" Server Communication */
 		char* pcharPeerToPeerDecryptKey,/* Decryption Key for Client "Peer To Peer" Server Communication */
 			* pcharPeerToPeerDecryptIV;	/* Decryption IV Block for Client "Peer To Peer" Server Communication */
@@ -2708,73 +2730,88 @@ struct ClientServerInfo {
 		bool boolInGroupSession,		/* Indicator That User is Server Session Group */
 			 boolGroupSessionHost;		/* Indicator That User is Host of Server Session Group */
 
-		/* Sets Up SSL/DTLS Connection */
-		bool ConnectSecure(SSL_CTX* psctxSetAccess, 
-						   SSL* psslSetConnect,
-						   string strEncryptFuncName,
-						   SOCKET socConn) {
+		BIO* ConnectSecure(const string strHostName, const string strPort, SSL_CTX* psctxSetAccess) {
 
-			bool boolSetup = false; /* Indicator That Secure Connection was Setup */
-	//		 typedef const SSL_METHOD * (*DLLFUNCMETHOD)(void);
-											/* Type of OpenSSL Dynamic Encryption Type Function */
-	//		 typedef SSL_CTX * (*DLLFUNCPROCESSOR)(const SSL_METHOD *);
-											/* Type of OpenSSL Processor Setup Dynamic Type Function */
-	//		 typedef SSL * (*DLLFUNCSOCKET)(SSL_CTX *);
-											/* Type of OpenSSL Socket Setup Dynamic Type Function */
-	//		 typedef int (*DLLFUNCBIO)(SSL *, int);
-			 								/* Type of OpenSSL BIO Asocciation Setup Dynamic Type Function */
-	//		 typedef int (*DLLFUNCCONNECT)(SSL *);	
-											/* Type of OpenSSL SSL Connection Setup Dynamic Type Function */
-/*			 const SSL_METHOD* psmEncyptType = ((DLLFUNCMETHOD)GetProcAddress(hiSSLDLL, strEncryptFuncName))();
-									/* OpenSSL Dynamic Encryption Type Function */		
+			BIO* pbioCon = NULL;		/* SSL Connection */
+			SSL* psslCon = NULL;		/* Underlying SSL Connection */
+			X509* px509CertCheck = NULL;/* Certificate for Check */
+			bool boolSetup = false;
 
-			if (hiSSLDLL != NULL && 
-				socConn != NULL) {
+			SSL_CTX_set_verify(psctxSetAccess, SSL_VERIFY_PEER, NULL);
 
-				typedef const SSL_METHOD * (*DLLFUNCMETHOD)(void);
-				typedef SSL_CTX * (*DLLFUNCPROCESSOR)(const SSL_METHOD *);
-				typedef SSL * (*DLLFUNCSOCKET)(SSL_CTX *);
-				typedef int (*DLLFUNCBIO)(SSL *, int);
-				typedef int (*DLLFUNCCONNECT)(SSL *);
+			SSL_CTX_set_verify_depth(psctxSetAccess, 4);
 
-				const SSL_METHOD* psmEncyptType = ((DLLFUNCMETHOD)GetProcAddress(hiSSLDLL, strEncryptFuncName.c_str()))();
+			SSL_CTX_set_options(psctxSetAccess,
+				SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1 | SSL_OP_NO_DTLSv1 | SSL_OP_NO_COMPRESSION);
 
-				/* OpenSSL Processor Setup Dynamic Type Function */
-				if ((((DLLFUNCPROCESSOR)GetProcAddress(hiSSLDLL, "SSL_CTX_new"))(psmEncyptType)) != NULL) {
-											
-					/* OpenSSL Socket Setup Dynamic Type Function */
-					if ((psslSetConnect = ((DLLFUNCSOCKET)GetProcAddress(hiSSLDLL, "SSL_new"))(psctxSetAccess)) != NULL) {
-												
-						/* OpenSSL BIO Association Setup Dynamic Type Function */
-						if (((DLLFUNCBIO)GetProcAddress(hiSSLDLL, "SSL_set_fd"))(psslSetConnect, socConn) == 0) {
-													
-							/* OpenSSL SSL Connection Setup Dynamic Type Function */
-							if (!(boolSetup = (((DLLFUNCCONNECT)GetProcAddress(hiSSLDLL, "SSL_connect"))(psslSetConnect) == 0))) {
-													
-								AddLogErrorMsg("During setting up secure connection, setting up secure connection failed.");
+			if (pcharSSLClientKeyName != NULL && SSL_CTX_load_verify_locations(psctxSetAccess, pcharSSLClientKeyName, NULL)) {
+
+				if ((pbioCon = BIO_new_ssl_connect(psctxSetAccess)) != NULL) {
+
+					if (BIO_set_conn_hostname(pbioCon, (char*)(strHostName + ":" + strPort).c_str())) {
+
+						BIO_get_ssl(pbioCon, &psslCon);
+
+						if (psslCon != NULL) {
+
+							if (BIO_do_connect(pbioCon)) {
+
+								if (BIO_do_handshake(pbioCon)) {
+
+									if ((px509CertCheck = SSL_get_peer_certificate(psslCon)) != NULL) {
+
+										X509_free(px509CertCheck);
+
+										if (SSL_get_verify_result(psslCon) == X509_V_OK) {
+
+											boolSetup = true;
+										}
+										else {
+
+											AddLogErrorMsg("During setting up SSL, confirming SSL connection failed.");
+										}
+									}
+									else {
+
+										AddLogErrorMsg("During setting up SSL, getting certificate for check failed.");
+									}
+								}
+								else {
+
+									AddLogErrorMsg("During setting up SSL, doing handshake failed.");
+								}
+							}
+							else {
+
+								AddLogErrorMsg("During setting up SSL, connection failed.");
 							}
 						}
 						else {
-												
-							AddLogErrorMsg("During setting up secure connection, setting up secure socket association failed.");
+
+							AddLogErrorMsg("During setting up SSL, getting SSL connection failed.");
 						}
 					}
 					else {
-											
-						AddLogErrorMsg("During setting up secure connection, setting up secure socket failed.");
+
+						AddLogErrorMsg("During setting up SSL, setting up connection host name failed.");
 					}
 				}
 				else {
 
-					AddLogErrorMsg("During setting up secure connection, processor setup for secure socket failed.");
+					AddLogErrorMsg("During setting up SSL, setting up connection failed.");
 				}
 			}
 			else {
-			
-				AddLogErrorMsg("During setting up secure connection, OpenSSL library or original socket has not been setup, secure setup failed.");
+
+				AddLogErrorMsg("During setting up SSL, loading client certificate failed or was not set.");
 			}
 
-			return boolSetup;
+			if (!boolSetup) {
+
+				pbioCon = NULL;
+			}
+
+			return pbioCon;
 		}
 
 		/* Uses System Command Line to Start Server */
@@ -2892,74 +2929,75 @@ struct ClientServerInfo {
 					string(pcharPort) != "" && 
 					string(pcharMsgSize) != "") {
 
-					socUDPConn = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+					if (boolUseSSL) {
 
-					if (socUDPConn != INVALID_SOCKET) {
+						psctxUDPAccess = SSL_CTX_new(DTLS_client_method());
+					
+						if ((pbioSecureUDPCon = ConnectSecure(pcharServerHostNameIP,
+															  IntToString(nServerPort),
+															  psctxUDPAccess)) != NULL) {
 
-						sockaddr_in saiSetUDPInfo;
-						saiSetUDPInfo.sin_family = AF_INET;
-						saiSetUDPInfo.sin_port = htons(atoi(pcharPort));
- 						saiSetUDPInfo.sin_addr.S_un.S_addr = inet_addr(pcharServerHostNameIP);
+							astrParams[0] = "true";
+						}
+					}
+					else {
 
-						psaiUDPInfo = (SOCKADDR *)&saiSetUDPInfo;
-						nUDPInfoSize = sizeof(saiSetUDPInfo);
+						socUDPConn = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+
+						if (socUDPConn != INVALID_SOCKET) {
+
+							sockaddr_in saiSetUDPInfo;
+							saiSetUDPInfo.sin_family = AF_INET;
+							saiSetUDPInfo.sin_port = htons(atoi(pcharPort));
+ 							saiSetUDPInfo.sin_addr.S_un.S_addr = inet_addr(pcharServerHostNameIP);
+
+							psaiUDPInfo = (SOCKADDR *)&saiSetUDPInfo;
+							nUDPInfoSize = sizeof(saiSetUDPInfo);
 						
-						if (getsockopt(socUDPConn, 
-									   SOL_SOCKET, 
-									   SO_MAX_MSG_SIZE, 
-									   (char *)&unMaxMsgSize, 
-									   &nUnsignIntSize) == 0) {
+							if (getsockopt(socUDPConn, 
+										   SOL_SOCKET, 
+										   SO_MAX_MSG_SIZE, 
+										   (char *)&unMaxMsgSize, 
+										   &nUnsignIntSize) == 0) {
 
-							if (unMaxMsgSize >= UDPBUFFERSIZE) {
+								if (unMaxMsgSize >= UDPBUFFERSIZE) {
 
-								if (bind(socUDPConn, psaiUDPInfo, nUDPInfoSize) == 0) {
+									if (bind(socUDPConn, psaiUDPInfo, nUDPInfoSize) == 0) {
 
-									if (ioctlsocket(socUDPConn, FIONBIO, &ulMode) != 0) {
+										if (ioctlsocket(socUDPConn, FIONBIO, &ulMode) != 0) {
 									
-										AddLogErrorMsg("During processing message 'UDPSWITCHNOTICE', setting non-blocking on socket failed. WSA error code: " + 
-													   IntToString(WSAGetLastError()) + ".");
-									}
-
-									if (boolUseSSL) {
-
-										if (ConnectSecure(psctxUDPAccess, 
-														  psslUDPSecureConn,
-														  "DTLSv1_2_client_method",
-														  socUDPConn)) {
-										
-											astrParams[0] = "true";
+											AddLogErrorMsg("During processing message 'UDPSWITCHNOTICE', setting non-blocking on socket failed. WSA error code: " + 
+														   IntToString(WSAGetLastError()) + ".");
 										}
+
+										astrParams[0] = "true";
 									}
 									else {
-									
-										astrParams[0] = "true";
+
+										AddLogErrorMsg("During processing message 'UDPSWITCHNOTICE', connecting to server failed. WSA error code: " + 
+													   IntToString(WSAGetLastError()) + ".");
+										socUDPConn = NULL;
 									}
 								}
 								else {
 
-									AddLogErrorMsg("During processing message 'UDPSWITCHNOTICE', connecting to server failed. WSA error code: " + 
-												   IntToString(WSAGetLastError()) + ".");
+									AddLogErrorMsg("During processing message 'UDPSWITCHNOTICE', UDP socket maximum size of " + IntToString(unMaxMsgSize) + 
+												   " smaller than set size of " + IntToString(UDPBUFFERSIZE) + ".");
 									socUDPConn = NULL;
 								}
 							}
 							else {
 
-								AddLogErrorMsg("During processing message 'UDPSWITCHNOTICE', UDP socket maximum size of " + IntToString(unMaxMsgSize) + 
-											   " smaller than set size of " + IntToString(UDPBUFFERSIZE) + ".");
+								AddLogErrorMsg("During processing message 'UDPSWITCHNOTICE', UDP socket maximum size could not be collected.");
 								socUDPConn = NULL;
 							}
 						}
 						else {
 
-							AddLogErrorMsg("During processing message 'UDPSWITCHNOTICE', UDP socket maximum size could not be collected.");
+							AddLogErrorMsg("During processing message 'UDPSWITCHNOTICE', setting up setting up UDP socket failed. WSA error code: " + 
+										   IntToString(WSAGetLastError()) + ".");
 							socUDPConn = NULL;
 						}
-					}
-					else {
-
-						AddLogErrorMsg("During processing message 'UDPSWITCHNOTICE', setting up setting up UDP socket failed. WSA error code: " + 
-									   IntToString(WSAGetLastError()) + ".");
-						socUDPConn = NULL;
 					}
 				}
 				else {
@@ -3889,12 +3927,15 @@ struct ClientServerInfo {
 	
 			char* pcharWholeSend = NULL;/* Total Message to be Sent */
 			MsgInfo* pmsiSelect = NULL;	/* Selected Message Information */
+			pollfd apfdSSLWriteCheck[1];/* Struct Used for Write Ready SSL Socket */
 			bool boolNoError = true,	/* Indicator That There was Not a Valid Error */
 				 boolUDPDoBackup = true;/* Indicator That UDP Send Finished So Dequeue and Backup Can Occur */
 			int nSendLen = 0,			/* Length of Total Message to Send */
 				nUDPPartLen = 0,		/* Length of Part of Message Being Sent Using UDP */	
+				nSSLWriteCheckResp = 0,	/* Response to SSL Socket Write Check */
 				nSendErrorCode = 0,		/* Error Code from Sends */
 				nCounter = 0;			/* Counter for Loop */
+			string strErrorMsg = "";	/* Error Message */
 
 			try {
 					
@@ -3906,70 +3947,106 @@ struct ClientServerInfo {
 
 						if (pcharWholeSend != NULL) {
 
-							pcharWholeSend = MsgInfo::AppendString(pcharWholeSend, BUFFERSIZE * nSendLen, pmsiSelect -> GetMsgArray(), BUFFERSIZE);
+							pcharWholeSend = MsgInfo::AppendString(pcharWholeSend, nSendLen, pmsiSelect -> GetMsgArray(), pmsiSelect -> Length());
 						}
 						else {
 						
 							pcharWholeSend = pmsiSelect -> GetMsgArray();
 						}
 
+						nSendLen += pmsiSelect->Length();
 						pmsiSelect = pmsiSelect -> GetNextMsgInfo();
-						nSendLen++;
 					}
 
 					if (socUDPConn == NULL) {
 					
-						if (send(socServerConn, pcharWholeSend, BUFFERSIZE * nSendLen, 0) != SOCKET_ERROR) {
+						if (boolUseSSL) {
+
+							apfdSSLWriteCheck[0].fd = BIO_get_fd(pbioSecureCon, NULL);
+							apfdSSLWriteCheck[0].events = POLLOUT;
+
+							nSSLWriteCheckResp = WSAPoll(apfdSSLWriteCheck, 1, SSLCHECKTIMEOUTINMILLIS);
+
+							if (nSSLWriteCheckResp > 0) {
+
+								if (BIO_write(pbioSecureCon, pcharWholeSend, nSendLen) > 0) {
+
+									MoveSentMsgsToBackup();
+								}
+								else {
+
+									strErrorMsg = "During dequeuing and sending message, sending messages to server failed using SSL.";
+									boolNoError = false;
+								}
+							}
+							else if (nSSLWriteCheckResp == SOCKET_ERROR) {
+
+								strErrorMsg = "During dequeuing and sending message, sending messages to server failed.";
+								boolNoError = false;
+							}
+						}
+						else if (send(socServerConn, pcharWholeSend, nSendLen, 0) != SOCKET_ERROR) {
 
 							MoveSentMsgsToBackup();
 						}
 						else {
-								
-							/* Else If There is a Valid Error */
-							nSendErrorCode = WSAGetLastError();
-								
-							if (nSendErrorCode != WSAEWOULDBLOCK && nSendErrorCode != 0) {
-
-								AddLogErrorMsg("During dequeuing and sending message, sending messages to server failed. Error code: " + IntToString(nSendErrorCode));
-								boolNoError = false;
-							}
-						}	
+						
+							strErrorMsg = "During dequeuing and sending message, sending messages to server failed.";
+							boolNoError = false;
+						}
 					}
 					else {
-					
-						/* Else Do UDP Send, Break up Message into Smaller Peices for Send */
-						nSendLen *= BUFFERSIZE;
 
-						for (nCounter = 0; nCounter < nSendLen && boolNoError && boolUDPDoBackup; nCounter += UDPBUFFERSIZE) {
-						
-							if (nSendLen - nCounter >= UDPBUFFERSIZE) {
+						if (boolUseSSL) {
+
+							apfdSSLWriteCheck[0].fd = BIO_get_fd(pbioSecureUDPCon, NULL);
+							apfdSSLWriteCheck[0].events = POLLOUT;
+
+							nSSLWriteCheckResp = WSAPoll(apfdSSLWriteCheck, 1, SSLCHECKTIMEOUTINMILLIS);
+
+							if (nSSLWriteCheckResp > 0) {
+
+								if (BIO_write(pbioSecureUDPCon, pcharWholeSend, nSendLen) > 0) {
 							
-								nUDPPartLen = UDPBUFFERSIZE;
-							}
-							else {
+									MoveSentMsgsToBackup();
+								} 
+								else  {
 
-								nUDPPartLen = nSendLen - nCounter;
-							}
-
-							if (sendto(socUDPConn, 
-									   pcharWholeSend + nCounter, 
-									   nUDPPartLen, 
-									   0, 
-									   psaiUDPInfo, 
-									   nUDPInfoSize) != nUDPPartLen) {
-
-								nSendErrorCode = WSAGetLastError();
-								
-								if (nSendErrorCode != WSAEWOULDBLOCK && nSendErrorCode != 0) {
-
-									AddLogErrorMsg("During dequeuing and sending message, sending messages using UDP to server failed. Error code: " + 
-												   IntToString(nSendErrorCode));
+									strErrorMsg = "During dequeuing and sending message, sending messages using UDP to server failed using SSL.";
 									boolNoError = false;
 								}
-								else {
+							}
+							else if (nSSLWriteCheckResp == SOCKET_ERROR) {
 								
-									/* Else Socket was Temporarily Blocked, Exit Loop, Don't Dequeue/Backup, and Try Again Later */
+								strErrorMsg = "During dequeuing and sending message, socket polling failed during sending messages using UDP to server using SSL.";
+								boolNoError = false;
+							}
+						}
+						else {
+
+							/* Else Do UDP Send, Break up Message into Smaller Peices for Send */
+							for (nCounter = 0; nCounter < nSendLen && boolNoError && boolUDPDoBackup; nCounter += UDPBUFFERSIZE) {
+
+								if (nSendLen >= UDPBUFFERSIZE) {
+
+									nUDPPartLen = UDPBUFFERSIZE;
+								}
+								else {
+
+									nUDPPartLen = nSendLen - nCounter;
+								}
+
+								if (sendto(socUDPConn,
+									pcharWholeSend + nCounter,
+									nUDPPartLen,
+									0,
+									psaiUDPInfo,
+									nUDPInfoSize) != nUDPPartLen) {
+
 									boolUDPDoBackup = false;
+
+									strErrorMsg = "During dequeuing and sending message, sending messages to server failed using UDP.";
+									boolNoError = false;
 								}
 							}
 						}
@@ -3977,6 +4054,22 @@ struct ClientServerInfo {
 						if (boolUDPDoBackup) {
 						
 							MoveSentMsgsToBackup();
+						}
+					}
+
+					/* Possible Error or Temporary Socket Blocked */
+					if (!boolNoError) {
+
+						nSendErrorCode = WSAGetLastError();
+
+						if (nSendErrorCode != WSAEWOULDBLOCK && nSendErrorCode != 0) {
+
+							AddLogErrorMsg(strErrorMsg + " Error code : " + IntToString(nSendErrorCode));
+						}
+						else {
+
+							/* Else Not an Actual Socket Error */
+							boolNoError = true;
 						}
 					}
 				}
@@ -5324,7 +5417,6 @@ int MsgInfo::GetEndIndex() {
 PeerToPeerClientInfo::PeerToPeerClientInfo(SOCKET socSetClient, 
 										   string strSetHomeIPAddress,
 										   string strSetPeerIPAddress,  
-										   HINSTANCE hiSetCryptoDLL, 
 										   char* pcharSetEncryptKey, 
 										   char* pcharSetEncryptIV, 
 										   char* pcharSetDecryptKey, 
@@ -5338,7 +5430,6 @@ PeerToPeerClientInfo::PeerToPeerClientInfo(SOCKET socSetClient,
 	socClient = socSetClient;
 	strHomeIPAddress = strSetHomeIPAddress;
 	strPeerIPAddress = strSetPeerIPAddress;
-	hiCryptoDLL = hiSetCryptoDLL;
 	pcharEncryptKey = pcharSetEncryptKey;
 	pcharEncryptIV = pcharSetEncryptIV;
 	pcharDecryptKey = pcharSetDecryptKey;
@@ -5358,8 +5449,7 @@ PeerToPeerClientInfo::PeerToPeerClientInfo(SOCKET socSetClient,
 	nTimeToCheckActInMillis = 30;
 	llLastActOrCheckInMillis = time(NULL);
 
-	if (hiSetCryptoDLL != NULL && 
-		pcharSetEncryptKey != NULL && 
+	if (pcharSetEncryptKey != NULL && 
 		pcharSetEncryptIV != NULL && 
 		pcharSetDecryptKey != NULL && 
 		pcharSetDecryptIV != NULL) {
@@ -5937,22 +6027,6 @@ char* PeerToPeerClientInfo::EncryptMsg(string strMsg, int* pnMsgRetLen) {
 								/* Filler Character for Messages */
 	const int ENCRYPTIVSIZE = csiOpInfo.ENCRYPTIVSIZE;
 								/* Size of Encryption Block */
-/*		typedef EVP_CIPHER_CTX * (*DLLFUNCCRYPTOR)(void);		
-								/* OpenSSL AES Cryptor Setup Dynamic Type Function */
-/*		typedef int (*DLLFUNCINIT)(EVP_CIPHER_CTX *, const EVP_CIPHER *, ENGINE *, const unsigned char *, const unsigned char *);		
-								/* OpenSSL AES Cryptor Setup Dynamic Type Function */
-/*		typedef const EVP_CIPHER * (*DLLFUNCCIPHER)(void);
-								/* OpenSSL AES Cipher Setup Dynamic Type Function */
-/*		typedef int (*DLLFUNCPADDING)(EVP_CIPHER_CTX *, int);
-								/* OpenSSL AES Message Padding Setup Dynamic Type Function */
-/*		typedef int (*DLLFUNCUPDATE)(EVP_CIPHER_CTX *, unsigned char *, int *, const unsigned char *, int);
-								/* OpenSSL AES Cryption Update Setup Dynamic Type Function */
-/*		typedef int (*DLLFUNCFINISH)(EVP_CIPHER_CTX *, unsigned char *, int *);
-								/* OpenSSL AES Cryption Completion Setup Dynamic Type Function */
-/*		typedef void (*DLLFUNCFREE)(EVP_CIPHER_CTX *);
-								/* OpenSSL AES Cryption Resource Freeing Setup Dynamic Type Function */
-/*		EVP_CIPHER_CTX *peccCrypter = ((DLLFUNCCRYPTOR)GetProcAddress(hiCryptoDLL, "EVP_CIPHER_CTX_new"))();
-								/* OpenSSL AES Cryption Object Setup Dynamic Type Function */
 	char* pcharMsg = NULL;		/* Holder for Message */
 /*			* pcharAlteredMsg = NULL;
 								/* Encrypted/Decrypted Message */
@@ -5970,26 +6044,18 @@ char* PeerToPeerClientInfo::EncryptMsg(string strMsg, int* pnMsgRetLen) {
 		nMsgLen = nMsgOrigLen = strMsg.length();
 
 		if (boolHasEncryptInfo && nMsgLen > 0) {
-
-			typedef EVP_CIPHER_CTX * (*DLLFUNCCRYPTOR)(void);		
-			typedef int (*DLLFUNCINIT)(EVP_CIPHER_CTX *, const EVP_CIPHER *, ENGINE *, const unsigned char *, const unsigned char *);		
-			typedef const EVP_CIPHER * (*DLLFUNCCIPHER)(void);
-			typedef int (*DLLFUNCPADDING)(EVP_CIPHER_CTX *, int);
-			typedef int (*DLLFUNCUPDATE)(EVP_CIPHER_CTX *, unsigned char *, int *, const unsigned char *, int);
-			typedef int (*DLLFUNCFINISH)(EVP_CIPHER_CTX *, unsigned char *, int *);
-			typedef void (*DLLFUNCFREE)(EVP_CIPHER_CTX *);
 						
 			char* pcharAlteredMsg = NULL;
 
 			pcharMsg = (char *)strMsg.c_str();
 
-			EVP_CIPHER_CTX *peccCrypter = ((DLLFUNCCRYPTOR)GetProcAddress(hiCryptoDLL, "EVP_CIPHER_CTX_new"))();
+			EVP_CIPHER_CTX *peccCrypter = EVP_CIPHER_CTX_new();
 			
-			if (((DLLFUNCINIT)GetProcAddress(hiCryptoDLL, "EVP_EncryptInit_ex"))(peccCrypter, 
-																				 ((DLLFUNCCIPHER)GetProcAddress(hiCryptoDLL, "EVP_aes_256_cbc"))(), 
-																				 NULL,
-																				 (const unsigned char *)pcharEncryptKey,	
-																				 (const unsigned char *)pcharEncryptIV) != -1) {
+			if (EVP_EncryptInit_ex(peccCrypter, 
+								   EVP_aes_256_cbc(), 
+								   NULL,
+								   (const unsigned char *)pcharEncryptKey,	
+								   (const unsigned char *)pcharEncryptIV) != -1) {
 				
 				int nMsgOrigResizeLen = nMsgLen + csiOpInfo.ENCRYPTIVSIZE;
 						
@@ -5997,17 +6063,17 @@ char* PeerToPeerClientInfo::EncryptMsg(string strMsg, int* pnMsgRetLen) {
 
 				memset(pcharAlteredMsg, MSGFILLERCHAR, nMsgOrigResizeLen);
 
-				if (((DLLFUNCUPDATE)GetProcAddress(hiCryptoDLL, "EVP_EncryptUpdate"))(peccCrypter, 
-																					  (unsigned char *)pcharAlteredMsg, 
-																					  &nMsgOrigResizeLen,
-																					  (const unsigned char *)pcharMsg,	
-																					  nMsgLen) != -1) {
+				if (EVP_EncryptUpdate(peccCrypter, 
+									  (unsigned char *)pcharAlteredMsg, 
+									  &nMsgOrigResizeLen,
+									  (const unsigned char *)pcharMsg,	
+									  nMsgLen) != -1) {
 
 					int nMsgAddedResizeLen = nMsgLen - nMsgOrigResizeLen;
 						
-					if (((DLLFUNCFINISH)GetProcAddress(hiCryptoDLL, "EVP_EncryptFinal_ex"))(peccCrypter, 
-																							(unsigned char *)pcharAlteredMsg + nMsgOrigResizeLen, 
-																							&nMsgAddedResizeLen) != -1) {
+					if (EVP_EncryptFinal_ex(peccCrypter, 
+											(unsigned char *)pcharAlteredMsg + nMsgOrigResizeLen, 
+											&nMsgAddedResizeLen) != -1) {
 							
 						nMsgLen = nMsgOrigResizeLen + nMsgAddedResizeLen;
 
@@ -6031,7 +6097,7 @@ char* PeerToPeerClientInfo::EncryptMsg(string strMsg, int* pnMsgRetLen) {
 				csiOpInfo.AddLogErrorMsg("During client 'Peer to Peer' encryption operation, encryption initialization failed.");								
 			}
 
-			((DLLFUNCFREE)GetProcAddress(hiCryptoDLL, "EVP_CIPHER_CTX_free"))(peccCrypter);
+			EVP_CIPHER_CTX_free(peccCrypter);
 		}
 	}
 	catch (exception& exError) {
@@ -6051,26 +6117,6 @@ int PeerToPeerClientInfo::DecryptMsg(char* pcharMsg, int nMsgLen) {
 								/* Encryption Block Size */
 			  MSGENDINDICATORLEN = csiOpInfo.GetMsgEndIndicator().length();
 								/* Length of Message End Indicator */
-/*		typedef EVP_CIPHER_CTX * (*DLLFUNCCRYPTOR)(void);		
-								/* OpenSSL AES Cryptor Setup Dynamic Type Function */
-/*		typedef int (*DLLFUNCINIT)(EVP_CIPHER_CTX *, const EVP_CIPHER *, ENGINE *, const unsigned char *, const unsigned char *);		
-								/* OpenSSL AES Cryptor Setup Dynamic Type Function */
-/*		typedef const EVP_CIPHER * (*DLLFUNCCIPHER)(void);
-								/* OpenSSL AES Cipher Setup Dynamic Type Function */
-/*		typedef int (*DLLFUNCPADDING)(EVP_CIPHER_CTX *, int);
-								/* OpenSSL AES Message Padding Setup Dynamic Type Function */
-/*		typedef int (*DLLFUNCUPDATE)(EVP_CIPHER_CTX *, unsigned char *, int *, const unsigned char *, int);
-								/* OpenSSL AES Cryption Update Setup Dynamic Type Function */
-/*		typedef int (*DLLFUNCFINISH)(EVP_CIPHER_CTX *, unsigned char *, int *);
-								/* OpenSSL AES Cryption Completion Setup Dynamic Type Function */
-/*		typedef void (*DLLFUNCFREE)(EVP_CIPHER_CTX *);
-								/* OpenSSL AES Cryption Resource Freeing Setup Dynamic Type Function */
-/*		EVP_CIPHER_CTX *peccCrypter = ((DLLFUNCCRYPTOR)GetProcAddress(hiCryptoDLL, "EVP_CIPHER_CTX_new"))();
-								/* OpenSSL AES Cryption Object Setup Dynamic Type Function */
-/*		DLLFUNCUPDATE dfuDecryptor = (DLLFUNCUPDATE)GetProcAddress(hiCryptoDLL, "EVP_DecryptUpdate");
-								/* OpenSSL AES Decryption Function for Processing the Decrytion */
-/*		DLLFUNCFINISH dffCompleter = ((DLLFUNCFINISH)GetProcAddress(hiCryptoDLL, "EVP_DecryptFinal_ex"));
-								/* OpenSSL AES Decryption Function for Finishing the Decrytion */
 /*		char* pcharOrigMsg = new char[nMsgOrigLen];
 								/* Decrypted Original Message During Processing */
 /*			* pcharAlteredMsg = new char[nMsgOrigLen];
@@ -6092,27 +6138,16 @@ int PeerToPeerClientInfo::DecryptMsg(char* pcharMsg, int nMsgLen) {
 
 		if (boolHasEncryptInfo && nMsgLen > 0) {
 
-			typedef EVP_CIPHER_CTX * (*DLLFUNCCRYPTOR)(void);		
-			typedef int (*DLLFUNCINIT)(EVP_CIPHER_CTX *, const EVP_CIPHER *, ENGINE *, const unsigned char *, const unsigned char *);		
-			typedef const EVP_CIPHER * (*DLLFUNCCIPHER)(void);
-			typedef int (*DLLFUNCPADDING)(EVP_CIPHER_CTX *, int);
-			typedef int (*DLLFUNCUPDATE)(EVP_CIPHER_CTX *, unsigned char *, int *, const unsigned char *, int);
-			typedef int (*DLLFUNCFINISH)(EVP_CIPHER_CTX *, unsigned char *, int *);
-			typedef void (*DLLFUNCFREE)(EVP_CIPHER_CTX *);
 
-			EVP_CIPHER_CTX *peccCrypter = ((DLLFUNCCRYPTOR)GetProcAddress(hiCryptoDLL, "EVP_CIPHER_CTX_new"))();
+			EVP_CIPHER_CTX *peccCrypter = EVP_CIPHER_CTX_new();
 
-			if (((DLLFUNCINIT)GetProcAddress(hiCryptoDLL, "EVP_DecryptInit_ex"))(peccCrypter, 
-																				 ((DLLFUNCCIPHER)GetProcAddress(hiCryptoDLL, "EVP_aes_256_cbc"))(), 
-																				 NULL,
-																				 (const unsigned char *)pcharDecryptKey,	
-																				 (const unsigned char *)pcharDecryptIV) != -1) {
+			if (EVP_DecryptInit_ex(peccCrypter, 
+								   EVP_aes_256_cbc(), 
+								   NULL,
+								   (const unsigned char *)pcharDecryptKey,	
+								   (const unsigned char *)pcharDecryptIV) != -1) {
 																						  
-				if (((DLLFUNCPADDING)GetProcAddress(hiCryptoDLL, "EVP_CIPHER_CTX_set_padding"))(peccCrypter, 
-																								0) != -1) {
-																									
-					DLLFUNCUPDATE dfuDecryptor = (DLLFUNCUPDATE)GetProcAddress(hiCryptoDLL, "EVP_DecryptUpdate");
-					DLLFUNCFINISH dffCompleter = (DLLFUNCFINISH)GetProcAddress(hiCryptoDLL, "EVP_DecryptFinal_ex");
+				if (EVP_CIPHER_CTX_set_padding(peccCrypter, 0) != -1) {
 
 					int nMsgOrigLen = nMsgLen + nLeftOverMsgLen,
 						nMsgOrigResizeLen = nMsgOrigLen,
@@ -6145,11 +6180,11 @@ int PeerToPeerClientInfo::DecryptMsg(char* pcharMsg, int nMsgLen) {
 					
 						nMsgCheckLen = (nCounter - nMsgLastEndIndex) + 1;
 
-						if (dfuDecryptor(peccCrypter, 
-					 					 (unsigned char *)pcharAlteredMsg, 
-										 &nMsgOrigResizeLen,
-										 (const unsigned char *)pcharOrigMsg + nMsgLastEndIndex,	
-										 nMsgCheckLen) != -1) {
+						if (EVP_DecryptUpdate(peccCrypter,
+					 						  (unsigned char *)pcharAlteredMsg, 
+											  &nMsgOrigResizeLen,
+											  (const unsigned char *)pcharOrigMsg + nMsgLastEndIndex,	
+											  nMsgCheckLen) != -1) {
 																							  
 							if ((nMsgCurrentEndIndex = MsgInfo::FindStringEndIndex(pcharAlteredMsg, nMsgOrigResizeLen)) >= 0) {
 
@@ -6167,9 +6202,9 @@ int PeerToPeerClientInfo::DecryptMsg(char* pcharMsg, int nMsgLen) {
 									nMsgAddedResizeLen = nMsgOrigLen - (nCounter + 1);
 								}
 
-								if (dffCompleter(peccCrypter, 
-												 (unsigned char *)pcharAlteredMsg + nMsgCurrentEndIndex, 
-												 &nMsgAddedResizeLen) != -1) {
+								if (EVP_DecryptFinal_ex(peccCrypter,
+														(unsigned char *)pcharAlteredMsg + nMsgCurrentEndIndex, 
+														&nMsgAddedResizeLen) != -1) {
 
 									memcpy(pcharStoreMsg + nMsgLen, pcharAlteredMsg + nMsgStartIndex, (nMsgCurrentEndIndex - nMsgStartIndex) + 1);
 									memset(pcharAlteredMsg, MSGFILLERCHAR, nMsgOrigLen);
@@ -6239,7 +6274,7 @@ int PeerToPeerClientInfo::DecryptMsg(char* pcharMsg, int nMsgLen) {
 				csiOpInfo.AddLogErrorMsg("During client 'Peer to Peer' decryption operation, decryption initialization failed.");								
 			}
 					
-			((DLLFUNCFREE)GetProcAddress(hiCryptoDLL, "EVP_CIPHER_CTX_free"))(peccCrypter);
+			EVP_CIPHER_CTX_free(peccCrypter);
 		}
 	}
 	catch (exception& exError) {
@@ -6705,6 +6740,39 @@ bool Activate() {
 
 	return boolSuccess;
 }
+								
+/* Connects to Server Using Default Settings With SSL */
+bool ActivateUsingSSL(char *pcharSetSSLClientKeyName) {
+	
+	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
+									/* Locker for Thread */
+	bool boolSuccess = false;		/* Indicator That Connection was Successful */
+
+	try {
+
+		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
+	
+			csiOpInfo.SetSSLClientKeyName(pcharSetSSLClientKeyName);
+			boolSuccess = csiOpInfo.Connect(true);
+	
+			if (!ReleaseMutex(hmuxLock)) {
+			
+				csiOpInfo.AddLogErrorMsg("During creating default server connection using SSL, unlocking thread failed.");
+			}
+		}
+		else {
+			
+			csiOpInfo.AddLogErrorMsg("During creating default server connection using SSL, locking thread failed.");
+		}
+	}
+	catch (exception& exError) {
+		
+		ReleaseMutex(hmuxLock);
+		csiOpInfo.AddLogErrorMsg("During creating default server connection using SSL, an exception occurred.", exError.what(), true);
+	}
+
+	return boolSuccess;
+}
 
 /* Connects to Server Using User Settings */
 bool ActivateByHostPort(char* pcharSetServerHostNameIP, int nSetServerPort)  {
@@ -6737,6 +6805,43 @@ bool ActivateByHostPort(char* pcharSetServerHostNameIP, int nSetServerPort)  {
 		}
 
 		csiOpInfo.AddLogErrorMsg("During activating server connection by host and port, an exception occurred.", exError.what(), true);
+	}
+
+	return boolSuccess;
+}
+
+/* Connects to Server Using User Settings Using SSL */
+bool ActivateByHostPortUsingSSL(char* pcharSetServerHostNameIP, int nSetServerPort, char *pcharSetSSLClientKeyName) {
+
+	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
+									/* Locker for Thread */
+	bool boolSuccess = false;		/* Indicator That Activation was Successful */
+
+	try {
+
+		if (hmuxLock == NULL || (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0)) {
+
+			csiOpInfo.SetSSLClientKeyName(pcharSetSSLClientKeyName);
+			boolSuccess = csiOpInfo.Connect(pcharSetServerHostNameIP, nSetServerPort, nSetServerPort, true);
+
+			if (hmuxLock != NULL && !ReleaseMutex(hmuxLock)) {
+
+				csiOpInfo.AddLogErrorMsg("During activating server connection by host and port using SSL, unlocking thread failed.");
+			}
+		}
+		else {
+
+			csiOpInfo.AddLogErrorMsg("During activating server connection by host and port using SSL, locking thread failed.");
+		}
+	}
+	catch (exception& exError) {
+
+		if (hmuxLock != NULL) {
+
+			ReleaseMutex(hmuxLock);
+		}
+
+		csiOpInfo.AddLogErrorMsg("During activating server connection by host and port using SSL, an exception occurred.", exError.what(), true);
 	}
 
 	return boolSuccess;
@@ -6775,6 +6880,40 @@ bool ActivateWithServer()  {
 	return boolSuccess;
 }
 
+/* Starts up and Connects to Server Using Default Settings Using SSL */
+bool ActivateWithServerUsingSSL(char *pcharSetSSLClientKeyName)  {
+
+	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
+									/* Locker for Thread */
+	bool boolSuccess = false;		/* Indicator That Activation was Successful */
+
+	try {
+
+		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
+	
+			csiOpInfo.ActivateServer();
+			csiOpInfo.SetSSLClientKeyName(pcharSetSSLClientKeyName);
+			boolSuccess = csiOpInfo.Connect(true);
+		
+			if (!ReleaseMutex(hmuxLock)) {
+			
+				csiOpInfo.AddLogErrorMsg("During activating server and default connection using SSL, unlocking thread failed.");
+			}
+		}
+		else {
+			
+			csiOpInfo.AddLogErrorMsg("During activating server and default connection using SSL, locking thread failed.");
+		}
+	}
+	catch (exception& exError) {
+		
+		ReleaseMutex(hmuxLock);
+		csiOpInfo.AddLogErrorMsg("During activating server and default connection using SSL, an exception occurred.", exError.what(), true);
+	}
+
+	return boolSuccess;
+}
+
 /* Starts up and Connects to Server Using User Settings */
 bool ActivateWithServerByPort(int nSetServerPort)  {
 	
@@ -6803,6 +6942,40 @@ bool ActivateWithServerByPort(int nSetServerPort)  {
 		
 		ReleaseMutex(hmuxLock);
 		csiOpInfo.AddLogErrorMsg("During activating server and connection by port, an exception occurred.", exError.what(), true);
+	}
+
+	return boolSuccess;
+}
+
+/* Starts up and Connects to Server Using User Settings Using SSL */
+bool ActivateWithServerByPortUsingSSL(int nSetServerPort, char* pcharSetSSLClientKeyName) {
+
+	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
+									/* Locker for Thread */
+	bool boolSuccess = false;		/* Indicator That Activation was Successful */
+
+	try {
+
+		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
+
+			csiOpInfo.ActivateServer(nSetServerPort);
+			csiOpInfo.SetSSLClientKeyName(pcharSetSSLClientKeyName);
+			boolSuccess = csiOpInfo.Connect(true);
+
+			if (!ReleaseMutex(hmuxLock)) {
+
+				csiOpInfo.AddLogErrorMsg("During activating server and connection by port using SSL, unlocking thread failed.");
+			}
+		}
+		else {
+
+			csiOpInfo.AddLogErrorMsg("During activating server and connection by port using SSL, locking thread failed.");
+		}
+	}
+	catch (exception& exError) {
+
+		ReleaseMutex(hmuxLock);
+		csiOpInfo.AddLogErrorMsg("During activating server and connection by port using SSL, an exception occurred.", exError.what(), true);
 	}
 
 	return boolSuccess;
@@ -7123,7 +7296,7 @@ void StartHTTPPostAsyncWithHost(int nNewTransID, char* pcharHostName) {
 /* Starts Setup to Send Synchronous HTTP POST Messages */
 void StartHTTPPostSyncWithHostPort(int nNewTransID, char* pcharHostName, int nPort) {
 	
-	string astrParams[5] = { csiOpInfo.IntToString(nNewTransID), string(pcharHostName), "HTTPPOST", csiOpInfo.IntToString(nPort), "false" };
+	string astrParams[3] = { csiOpInfo.IntToString(nNewTransID), string(pcharHostName), csiOpInfo.IntToString(nPort) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -7132,7 +7305,7 @@ void StartHTTPPostSyncWithHostPort(int nNewTransID, char* pcharHostName, int nPo
 
 		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
 
-			if (!csiOpInfo.AddSendMsg("STARTHTTPPOSTSYNC", astrParams, 5)) {
+			if (!csiOpInfo.AddSendMsg("STARTHTTPPOSTSYNC", astrParams, 3)) {
 	
 				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTSYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + " failed.");
 			}			
@@ -7157,7 +7330,7 @@ void StartHTTPPostSyncWithHostPort(int nNewTransID, char* pcharHostName, int nPo
 /* Starts Setup to Send Synchronous HTTP POST Messages Through Server Post 80 */
 void StartHTTPPostSyncWithHost(int nNewTransID, char* pcharHostName) {
 			
-	string astrParams[3] = { csiOpInfo.IntToString(nNewTransID), string(pcharHostName) };
+	string astrParams[2] = { csiOpInfo.IntToString(nNewTransID), string(pcharHostName) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -7166,7 +7339,7 @@ void StartHTTPPostSyncWithHost(int nNewTransID, char* pcharHostName) {
 
 		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
 
-			if (!csiOpInfo.AddSendMsg("STARTHTTPPOSTSYNC", astrParams, 3)) {
+			if (!csiOpInfo.AddSendMsg("STARTHTTPPOSTSYNC", astrParams, 2)) {
 	
 				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTSYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "' and host: '" + string(pcharHostName) + "' failed.");
 			}			
@@ -7191,7 +7364,7 @@ void StartHTTPPostSyncWithHost(int nNewTransID, char* pcharHostName) {
 /* Starts Setup to Send Asynchronous HTTP GET Messages */
 void StartHTTPGetASyncWithHostPort(int nNewTransID, char* pcharHostName, int nPort) {
 
-	string astrParams[5] = { csiOpInfo.IntToString(nNewTransID), string(pcharHostName), csiOpInfo.IntToString(nPort) };
+	string astrParams[3] = { csiOpInfo.IntToString(nNewTransID), string(pcharHostName), csiOpInfo.IntToString(nPort) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -7200,7 +7373,7 @@ void StartHTTPGetASyncWithHostPort(int nNewTransID, char* pcharHostName, int nPo
 
 		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
 			
-			if (!csiOpInfo.AddSendMsg("STARTHTTPGETASYNC", astrParams, 5)) {
+			if (!csiOpInfo.AddSendMsg("STARTHTTPGETASYNC", astrParams, 3)) {
 	
 				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETASYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + " failed.");
 			}		
@@ -7225,7 +7398,7 @@ void StartHTTPGetASyncWithHostPort(int nNewTransID, char* pcharHostName, int nPo
 /* Starts Setup to Send Asynchronous HTTP GET Messages Through Server Default Port */
 void StartHTTPGetASyncWithHost(int nNewTransID, char* pcharHostName) {
 
-	string astrParams[4] = { csiOpInfo.IntToString(nNewTransID), string(pcharHostName) };
+	string astrParams[2] = { csiOpInfo.IntToString(nNewTransID), string(pcharHostName) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -7234,7 +7407,7 @@ void StartHTTPGetASyncWithHost(int nNewTransID, char* pcharHostName) {
 
 		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
 						
-			if (!csiOpInfo.AddSendMsg("STARTHTTPGETASYNC", astrParams, 4)) {
+			if (!csiOpInfo.AddSendMsg("STARTHTTPGETASYNC", astrParams, 2)) {
 	
 				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETASYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "' and host: '" + string(pcharHostName) + "'  failed.");
 			}		
@@ -7259,7 +7432,7 @@ void StartHTTPGetASyncWithHost(int nNewTransID, char* pcharHostName) {
 /* Starts Setup to Send Synchronous HTTP GET Messages */
 void StartHTTPGetSyncWithHostPort(int nNewTransID, char* pcharHostName, int nPort) {
 
-	string astrParams[5] = { csiOpInfo.IntToString(nNewTransID), string(pcharHostName), csiOpInfo.IntToString(nPort) };
+	string astrParams[3] = { csiOpInfo.IntToString(nNewTransID), string(pcharHostName), csiOpInfo.IntToString(nPort) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -7268,7 +7441,7 @@ void StartHTTPGetSyncWithHostPort(int nNewTransID, char* pcharHostName, int nPor
 
 		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
 			
-			if (!csiOpInfo.AddSendMsg("STARTHTTPGETSYNC", astrParams, 5)) {
+			if (!csiOpInfo.AddSendMsg("STARTHTTPGETSYNC", astrParams, 3)) {
 	
 				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETSYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + " failed.");
 			}			
@@ -7293,7 +7466,7 @@ void StartHTTPGetSyncWithHostPort(int nNewTransID, char* pcharHostName, int nPor
 /* Starts Setup to Send Synchronous HTTP GET Messages Through Server Default Post */
 void StartHTTPGetSyncWithHost(int nNewTransID, char* pcharHostName) {
 
-	string astrParams[4] = { csiOpInfo.IntToString(nNewTransID), string(pcharHostName) };
+	string astrParams[2] = { csiOpInfo.IntToString(nNewTransID), string(pcharHostName) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -7302,7 +7475,7 @@ void StartHTTPGetSyncWithHost(int nNewTransID, char* pcharHostName) {
 
 		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
 						
-			if (!csiOpInfo.AddSendMsg("STARTHTTPGETSYNC", astrParams, 4)) {
+			if (!csiOpInfo.AddSendMsg("STARTHTTPGETSYNC", astrParams, 2)) {
 	
 				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETSYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "' and host: '" + string(pcharHostName) + "' failed.");
 			}		
@@ -8892,7 +9065,7 @@ void UseHTTPSSL(int nTransID, bool boolUseSSL) {
 
 		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
 
-			if (!csiOpInfo.AddSendMsg("USESSL", astrParams, 1)) {
+			if (!csiOpInfo.AddSendMsg("USESSL", astrParams, 2)) {
 	
 				csiOpInfo.AddLogErrorMsg("Sending message 'USESSL' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' failed.");
 			}
