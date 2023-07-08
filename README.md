@@ -12,3 +12,12 @@ RevCommSuite is an open source API that allows communications capabilities to be
 - Support for SSL and OpenSSL encryption
 - Ability to create connections between multiple applications
 - Seamless recovery of lost messages between client and server through replay functionality
+
+2.3 Major Update:
+
+- Added new processor for C#: RevCommProcessor.cs (with limited functionality)
+- Improved RevCommServer data map and process functionality with new 'maxconnectionsperobject' setting for applying a number of max database connections.
+- Added HTTP transmission functionality for RevCommProcessor (C#)
+- Update to OpenSSL 3.0.8 and TLS 1.2
+- Fixes for SSL usage
+- Fixes for HTTP transmission functionality
