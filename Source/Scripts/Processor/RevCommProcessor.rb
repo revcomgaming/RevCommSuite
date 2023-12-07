@@ -215,7 +215,6 @@ module RevCommProcessor
           @fAutoRetLimitInMillis = 1000  # Automated Retrieval for HTTP Transmission or Data Process Time Limit in Milliseconds
           @boolAutoRetProcessCmd = false # Indicator to Process Automated Retrieval Client Messages
           @boolAutoRetEndTrans = false   # Indicator to Close HTTP Transmission or Delete Data Process After Automated Retrieval  
-          @boolSSLConnect = false        # Indicator to Connect to Server Using SSL
           @boolDebug = false             # Indicator To Do Debugging
      
           # Processes Incoming Communications 
@@ -560,14 +559,14 @@ module RevCommProcessor
           
      public
      
-        def self.Connect(strHostNameIP = '', nPort = 0, boolStartServer = false, strSSLPrivKeyName = "")
+        def self.Connect(strHostNameIP = '', nPort = 0, boolStartServer = false, strSSLPrivKeyName = "", boolSSLConnect = false)
               
               boolConnected = IsConnected()
                                   # Indicator That Client Server Connection was Made
             
               begin
 
-                  if @boolSSLConnect == false || (@boolSSLConnect == true && strSSLPrivKeyName != "")
+                  if boolSSLConnect == false || (boolSSLConnect == true && strSSLPrivKeyName != "")
                   
                        if boolConnected == false 
                      
@@ -577,7 +576,7 @@ module RevCommProcessor
                                  # If No Hostname or IP Address was Set, Connect with Default Settings
                                  if strHostNameIP == '' 
                                    
-                                       if @boolSSLConnect == true
+                                       if boolSSLConnect == true
 
                                             if Win32API.new('RevCommClient32', 'ActivateUsingSSL', 'P', 'I').call(strSSLPrivKeyName) == 1
                                          
@@ -601,7 +600,7 @@ module RevCommProcessor
                                        
                                  elsif nPort != 0
                                    
-                                       if @boolSSLConnect == true
+                                       if boolSSLConnect == true
 
                                             if Win32API.new('RevCommClient32', 'ActivateByHostPortUsingSSL', 'PIP', 'I').call(strHostNameIP, nPort, strSSLPrivKeyName) == 1
                                               
@@ -632,7 +631,7 @@ module RevCommProcessor
                              elsif nPort != 0
                                  
                                    
-                                 if @boolSSLConnect == true
+                                 if boolSSLConnect == true
 
                                       if Win32API.new('RevCommClient32', 'ActivateWithServerUsingSSL', 'P', 'I').call(strSSLPrivKeyName) == 1
                                         
@@ -654,7 +653,7 @@ module RevCommProcessor
                                                              
                                  end
                                  
-                             elsif @boolSSLConnect == true 
+                             elsif boolSSLConnect == true 
 
                                   if Win32API.new('RevCommClient32', 'ActivateWithServerByPortUsingSSL', 'IP', 'I').call(nPort, strSSLPrivKeyName) == 1
                                             
@@ -777,8 +776,7 @@ module RevCommProcessor
 
         def self.ConnectWithSSL(strSSLPrivKeyName, strHostNameIP = '', nPort = 0, boolStartServer = false)
 
-          @boolSSLConnect = true 
-          return Connect(strHostNameIP, nPort, boolStartServer, strSSLPrivKeyName)
+          return Connect(strHostNameIP, nPort, boolStartServer, strSSLPrivKeyName, true)
         end
         
         # Starts "Peer To Peer" Server with Optional Encryption

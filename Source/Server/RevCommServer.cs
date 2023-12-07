@@ -2136,6 +2136,7 @@ namespace RevelationsStudios.RevCommServer {
                                                 }
 
                                                 strMsgCollect += Encoding.UTF8.GetString(abyteWebSockDecoded);
+                                                nWebSockOffset = 0;
                                             }
                                             else {
                                                     
@@ -5478,7 +5479,7 @@ namespace RevelationsStudios.RevCommServer {
                                                  strDatabaseName,
                                                  strUserName,
                                                  strPassword,
-                                                 boolUseSSL) != null;
+                                                 boolUseSSL);
 	        	}
         	}
         	catch (Exception exError) {
@@ -9622,7 +9623,7 @@ namespace RevelationsStudios.RevCommServer {
                    "                        SET strMsg = CONCAT(strMsg, ','); " +
                    "                    END IF; " +
                    " " +
-                   "                    IF CONCAT('', strValue * 1) != strValue AND boolNotJSON " +
+                   "                    IF REPLACE(strValue, '.', '') NOT REGEXP '^-?[0-9]+$' AND boolNotJSON " +
                    "                    THEN " +
                    "                        SET strMsg = CONCAT(strMsg, '{\"NAME\": \"', strName, '\", \"VALUE\": \"', strValue, '\"}'); " +
                    "                    ELSE " +
@@ -9690,7 +9691,7 @@ namespace RevelationsStudios.RevCommServer {
                    "                                    SET strMsg = CONCAT(strMsg, ','); " +
                    "                                END IF; " +
                    " " +
-                   "                                IF CONCAT('', strValue * 1) != strValue AND boolNotJSON " +
+                   "                                IF REPLACE(strValue, '.', '') NOT REGEXP '^-?[0-9]+$' AND boolNotJSON " +
                    "                                THEN " +
                    "                                    SET strMsg = CONCAT(strMsg, '\"', strValue, '\"'); " +
                    "                                ELSE " +

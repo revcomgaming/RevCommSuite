@@ -326,56 +326,6 @@ var COMM = {
 		
 		this.Connect(strHostNameIP, nPort, true);
 	},
-	StartPeerToPeerServer: function(strHostNameIP, nPort, strEncryptKey, strEncryptIV) {
-		
-		if (this.IsConnected()) {
-			
-			if (typeof(strHostNameIP) == 'string' && strHostNameIP.trim() != "") {
-				
-				if (Number.isInteger(nPort)) {
-
-					this.ClientMsgSend(['StartPeerToPeerServer', strHostNameIP, nPort, strEncryptKey, strEncryptIV]);
-				}
-				else {
-
-					LOGGER.Log('Starting peer-to-peer server failed, port is not set.');
-				}
-			}
-			else {
-
-				LOGGER.Log('Starting peer-to-peer server failed, hostname/IP is not set.');
-			}
-		}
-		else {
-
-			LOGGER.Log('Client web worker not setup, unable to start to peer-to-peer server.');
-		}
-	},
-	StartPeerToPeerConnect: function(strHostNameIP, nPort, strEncryptKey, strEncryptIV) {
-		
-		if (this.IsConnected()) {
-			
-			if (typeof(strHostNameIP) == 'string' && strHostNameIP.trim() != "") {
-				
-				if (Number.isInteger(nPort)) {
-			
-					this.ClientMsgSend(['StartPeerToPeerConnect', strHostNameIP, nPort, strEncryptKey, strEncryptIV]);	
-				}
-				else {
-
-					LOGGER.Log('Starting peer-to-peer connection failed, port is not set.');
-				}
-			}
-			else {
-
-				LOGGER.Log('Starting peer-to-peer connection failed, hostname/IP is not set.');
-			}
-		}
-		else {
-
-			LOGGER.Log('Client web worker not setup, unable to connect to peer-to-peer server.');
-		}
-	},
 	StartHTTPPost: function(nNewTransID, strHostNameIP, nPort, boolAsync) {
 
         var boolStarted = false;  	/* Indicator That Storage was Started */
@@ -1377,7 +1327,7 @@ var COMM = {
             
         return boolSend;
 	},
-	SendDirectClientMsg: function(strMsgDesign, boolSendServer, boolSendPeerToPeer) {
+	SendDirectClientMsg: function(strMsgDesign) {
 	
         var boolSend = false     	/* Indicator That Message was Sent */
 		
@@ -1391,18 +1341,8 @@ var COMM = {
 						
 						strMsgDesign = '';
 					}
-					
-					if (typeof(boolSendServer) != 'boolean') {
-						
-						boolSendServer = true;
-					}
-					
-					if (typeof(boolSendPeerToPeer) != 'boolean') {
-						
-						boolSendPeerToPeer = false;
-					}
 	
-	                this.SendDirectRawMsg(JSON.stringify([this.objSendStorage['DIRECTCLIENT']]), strMsgDesign, boolSendServer, boolSendPeerToPeer);    
+	                this.SendDirectRawMsg(JSON.stringify([this.objSendStorage['DIRECTCLIENT']]), strMsgDesign);    
 	                this.ClearDirectClientMsgDesign();
 	                boolSend = true;
 				}
@@ -1419,7 +1359,7 @@ var COMM = {
         
         return boolSend;
 	},
-	SendDirectRawMsg: function(strMsg, strMsgDesign, boolSendServer, boolSendPeerToPeer) {
+	SendDirectRawMsg: function(strMsg, strMsgDesign) {
 		
 		if (this.IsConnected()) {
 
@@ -1429,18 +1369,8 @@ var COMM = {
 					
 					strMsgDesign = '';
 				}
-					
-				if (typeof(boolSendServer) != 'boolean') {
-					
-					boolSendServer = true;
-				}
-				
-				if (typeof(boolSendPeerToPeer) != 'boolean') {
-					
-					boolSendPeerToPeer = false;
-				}
 			
-				this.ClientMsgSend(['SendDirectRawMsg', strMsg, strMsgDesign, boolSendServer, boolSendPeerToPeer]);		
+				this.ClientMsgSend(['SendDirectRawMsg', strMsg, strMsgDesign]);		
 			}
 			else {
 
@@ -1820,183 +1750,6 @@ var COMM = {
 			
 			delete this.aobjDataMaps[strDesign];
 		} 
-	},
-	FileDownloadStart: function(strFileDesign) {
-		
-		if (this.IsConnected()) {
-
-			if (typeof(strFileDesign) == 'string' && strFileDesign.trim() != "") {
-
-				if (navigator && navigator.webkitPersistentStorage && window.requestFileSystem) {
-					
-					this.ClientMsgSend(['FileDownloadStart', strFileDesign]);
-				}
-				else {
-
-					LOGGER.Log('Starting file download failed. Browser does not support file downloads.');
-				}
-			}
-			else {
-
-				LOGGER.Log('Starting file download failed, file designation is not set.');
-			}
-		}
-		else {
-
-			LOGGER.Log('Client web worker not setup, unable to start file download.');
-		}
-	},
-	FileDownloadFinish: function(strFileDesign, strFilePathOverride) {
-		
-//		var objMsgSelect,			/* Selected Message */		
-//			nFileSize = 0,			/* File Size */
-//			strMsg = "",			/* Holder for Message as String */
-//			strCharSelect,			/* Selected Character of Message as String */
-//			nCounter = 0;			/* Counter for Loop */
-	
-		if (this.IsConnected()) {
-
-			if (typeof(strFileDesign) == 'string' && strFileDesign.trim() != "") {
-			
-				this.ClientMsgSend(['FileDownloadFinish', strFileDesign, strFilePathOverride]);
-			
-				try {
-					
-					var objMsgSelect = this.GetReceivedMsg("STREAMFILE", [{NAME: "DESIGNATION", VALUE: strFileDesign}], true),
-						nFileSize = 0;
-					
-					if (objMsgSelect) {
-						
-						if (objMsgSelect.MESSAGE.instanceof('Blob')) {
-							
-							nFileSize = objMsgSelect.MESSAGE.size;
-						}
-						else if (typeof(objMsgSelect.MESSAGE) == 'string') {
-
-							var strMsg = objMsgSelect.MESSAGE;
-								strCharSelect,
-								nCounter = 0;
-								
-							nFileSize = strMsg.length;
-							
-							for (nCounter = strMsg.length - 1; nCounter >= 0; nCounter--) {
-								
-								strCharSelect = strMsg.charCodeAt(nCounter);
-								
-								if (strCharSelect > 0x7f && strCharSelect <= 0x7ff) {
-									
-									/* If Indicator That a Bit Should be Read */
-									nFileSize++;
-								}
-								else if (strCharSelect > 0x7ff && strCharSelect <= 0xffff) {
-
-									/* End of File Indicator */
-									nFileSize += 2;
-								}
-								else if (strCharSelect > 0xDC00 && strCharSelect <= 0xDFFF) {
-
-									/* Ignore Trailing Surrogates */
-									nFileSize--;
-								}
-							}
-						}
-	
-						if (nFileSize) {
-							
-							navigator.webkitPersistentStorage.requestQuota(
-									nFileSize,
-									new Function("																																						\
-																																																		\
-										if (arguments[0] < " + nFileSize + ") {																															\
-																																																		\
-											window.requestFileSystem(																																	\
-												PERMANENT,																																				\
-												arguments[0],	 																																		\
-												function(fsDirectAccess) {																																\
-																																																		\
-													fsDirectAccess.root.getFile(																														\
-														'" + objMsgSelect.FILEPATH + "', 					 																							\
-														{ create: true },																																\
-														function(feFileAccess) {				  																										\
-																																																		\
-															feFileAccess.createWriter(function(fwCreator) {																								\
-																																																		\
-																var objFileInfo = COMM.GetReceivedMsg('STREAMFILE', [{NAME: 'DESIGNATION', VALUE: '" + objMsgSelect.DESIGNATION + "'}]);				\
-																																																		\
-																if (objFileInfo) {																														\
-																																																		\
-																	try {																																\
-																																																		\
-																		var bbFileContents = objFileInfo.MESSAGE;	/* File Contents as a Blob */														\
-																																																		\
-																		if (!bbFileContents.instanceof('Blob')) {																						\
-																																																		\
-																			bbFileContents = new Blob([objFileInfo.MESSAGE], {encoding: 'UTF-8', type: 'text/plain;charset=UTF-8'});					\
-																		}																																\
-																																																		\
-																		fwCreator.write(bbFileContents);																								\
-																	}																																	\
-																	catch(exError) {																													\
-																																																		\
-																		LOGGER.Log('Finishing file download failed during file creation. Exception: exError.message);									\
-																	}																																	\
-																}																																		\
-																else {																																	\
-																																																		\
-																	LOGGER.Log('Finishing file download failed during file creation. File not found, designation: " + objMsgSelect.DESIGNATION + ");	\
-																}																																		\																																			\
-															},																																			\
-															function(exError) {																															\
-																																																		\
-																LOGGER.Log('Finishing file download failed during file creation. Exception code: ' + exError.code);										\
-															});																																			\
-														},																																				\
-														function(exError) {																																\
-																																																		\
-															LOGGER.Log('Finishing file download failed during file creation setup. Exception code: ' + exError.code);									\
-														}																																				\
-													);																																					\
-												},																																						\
-												function(exError) {																																		\
-																																																		\
-													LOGGER.Log('Finishing file download failed during file system request. Exception code: ' + exError.code);											\
-												});																																						\
-										}																																								\
-										else {																																							\
-																																																		\
-											LOGGER.Log('Finishing file download failed during file system request. Only ' + arguments[0] + ' of " + nFileSize + " allocated.');							\
-										}																																								\
-									"),
-									function(exError) {
-										
-										LOGGER.Log('Finishing file download failed during file space request. Exception code: ' + exError.code);
-									}
-							);
-							
-							boolDownloaded = true;
-						}
-						else {
-	
-							LOGGER.Log('Finishing file download failed. Browser does not support file downloads.');
-						}
-					}
-				}
-				catch (exError) {
-					
-					LOGGER.Log('Finishing file download failed. Exception: ' + exError.messages + '.');
-				}
-			}
-			else {
-
-				LOGGER.Log('Finishing file download failed, file designation is not set.');
-			}
-		}
-		else {
-
-			LOGGER.Log('Client web worker not setup, unable to check if file download finished.');
-		}
-		
-		return boolDownloaded;
 	},
 	GetReceivedMsg: function(strMsgType, aCheckParams, boolReadOnly) {
 	
@@ -2548,17 +2301,6 @@ var COMM = {
 		else {
 
 			LOGGER.Log('Client web worker not setup, unable to disconnect from server.');
-		}
-	},
-	DisconnectPeerToPeer: function() {
-		
-		if (this.IsConnected()) {
-			
-			this.ClientMsgSend(['ClosePeerToPeer']);
-		}
-		else {
-
-			LOGGER.Log('Client web worker not setup, unable to disconnect from peer-to-peer server.');
 		}
 	},
 	SetQueueLimit: function(nNewLimit) {

@@ -9,7 +9,8 @@ using System.Text;
 using System.Globalization;
 using System.ComponentModel;
 using Newtonsoft.Json;
- 
+using System.Linq;
+
 namespace RevelationsStudios.RevCommProcessor {
 
     public class ClientMsg {
@@ -61,6 +62,11 @@ namespace RevelationsStudios.RevCommProcessor {
         public MethodInfo miFuncInvoke { get; set; }
     }
 
+    public class DownloadFileList { 
+    
+        public List<string> STREAMFILELIST { get; set; }
+    }
+
     public class RevCommProcessor {
 
         private const int BUFFERSIZE = 8192,/* Size of Message Buffer */
@@ -98,10 +104,13 @@ namespace RevelationsStudios.RevCommProcessor {
                                     /* Storage for Functions to Call When Receiving Direct Message Response Messages to Server */
         private Dictionary<int, Dictionary<int, CancellationTokenSource>> dictSendHTTPReceivers = 
             new Dictionary<int, Dictionary<int, CancellationTokenSource>>();
-                                    /* Storage for Functions to Call When Receiving HTTP Response Messages to Server */
+                                    /* List of HTTP Response Messages to Process */
         private Dictionary<int, Dictionary<int, CancellationTokenSource>> dictSendDataProcessReceivers = 
             new Dictionary<int, Dictionary<int, CancellationTokenSource>>();
-                                    /* Storage for Functions to Call When Receiving Data Process Response Messages to Server */
+                                    /* List of Data Processes Response Messages to Process Asyncronously */
+        private Dictionary<int, Dictionary<int, DateTime>> dictSendDataProcessStartTime = 
+            new Dictionary<int, Dictionary<int, DateTime>>();
+                                    /* List of Data Processes Response Messages to Process with Start Time */
         private Dictionary<string, DataMap> dictDataMaps = new Dictionary<string, DataMap>();
                                     /* For Mapping Variables or Functions to Data Processes */
         private List<int> ltnUsedIDs = new List<int>();
@@ -139,6 +148,22 @@ namespace RevelationsStudios.RevCommProcessor {
 
         [DllImport("RevCommClient64.dll", EntryPoint = "ActivateWithServerByPort")]
         private static extern bool ClientActivateWithServerByPort(int nPort);
+                                    /* Connects to Server Using Default Host and Set Port for Local Server */
+
+        [DllImport("RevCommClient64.dll", EntryPoint = "ActivateUsingSSL")]
+        private static extern bool ClientActivateUsingSSL(string strSSLPrivKeyName);
+                                    /* Connects to Server Using Default Settings */
+
+        [DllImport("RevCommClient64.dll", EntryPoint = "ActivateByHostPortUsingSSL")]
+        private static extern bool ClientActivateByHostPortUsingSSL(string strHostName, int nPort, string strSSLPrivKeyName);
+                                    /* Connects to Server Using Host and Port */
+
+        [DllImport("RevCommClient64.dll", EntryPoint = "ActivateWithServerUsingSSL")]
+        private static extern bool ClientActivateWithServerUsingSSL(string strSSLPrivKeyName);
+                                    /* Connects to Server Using Default Settings for Local Server */
+
+        [DllImport("RevCommClient64.dll", EntryPoint = "ActivateWithServerByPortUsingSSL")]
+        private static extern bool ClientActivateWithServerByPortUsingSSL(int nPort, string strSSLPrivKeyName);
                                     /* Connects to Server Using Default Host and Set Port for Local Server */
 
         [DllImport("RevCommClient64.dll", EntryPoint = "StartStream")]
@@ -302,7 +327,7 @@ namespace RevelationsStudios.RevCommProcessor {
                                     /* Gets Downloaded File from Stream and Outputs File to Destination Directory, Before File is Removed */
 
         [DllImport("RevCommClient64.dll", EntryPoint = "CheckStreamFileDownload")]
-        private static extern bool ClientCheckStreamFileDownload(string strFileDesign, StringBuilder sbRetFilePath, int nFilePathLen, StringBuilder sbRetFileContents);
+        private static extern bool ClientCheckStreamFileDownload(string strFileDesign, StringBuilder sbRetFilePath, int nFilePathLen, IntPtr pRetFileContents);
                                     /* Gets If File was Downloaded from Stream and Returns It, Before File is Removed */
 
         [DllImport("RevCommClient64.dll", EntryPoint = "CheckStreamFileReady")]
@@ -523,7 +548,7 @@ namespace RevelationsStudios.RevCommProcessor {
 
                 if (strJSONMsg != "") {
 
-                    ltJSONMsg = JsonConvert.DeserializeObject<List<ClientMsg>>(strJSONMsg);
+                    ltJSONMsg = JsonConvert.DeserializeObject<List<ClientMsg>>(strJSONMsg.Substring(0, strJSONMsg.LastIndexOf("]") + 1));
 
                     foreach (ClientMsg cmUpdateSets in ltJSONMsg) {
 
@@ -654,8 +679,12 @@ namespace RevelationsStudios.RevCommProcessor {
             }
             catch (Exception exError) {
 
-                Log("Processing incoming messages failed. Exception: " + exError.Message + ". Backtrace: " +
-                    string.Join(" || ", exError.StackTrace), true);
+                /* If Not Getting a List of Updated Rows Returned by the Database */
+                if (!strJSONMsg.Contains("[{\"rows\":")) { 
+
+                    Log("Processing incoming messages failed. Exception: " + exError.Message + ". Backtrace: " +
+                        string.Join(" || ", exError.StackTrace), true);
+                }
             }
         }
 
@@ -707,69 +736,110 @@ namespace RevelationsStudios.RevCommProcessor {
         /// <param name="strHostNameIP">Optional Hostname or IP Address to Connect, Defaults to 127.0.0.1</param>
         /// <param name="nPort">Optional Port to Connect to, Defaults to Client Settings</param>
         /// <param name="boolStartServer">Optional Indicator to Start Local Server, Defaults to False</param>
+        /// <param name="strSSLPrivKeyName">Optional Name of SSL Private Key, Required Only If Using SSL Connection</param>
+        /// <param name="boolSSLConnect">Optional Indicator to Use SSL to Use SSL, Defaults to False</param>
         /// <returns>True If Connection is Made, Else False</returns>
-        public bool Connect(string strHostNameIP = "", int nPort = 0, bool boolStartServer = false) {
+        public bool Connect(string strHostNameIP = "", 
+                            int nPort = 0, 
+                            bool boolStartServer = false, 
+                            string strSSLPrivKeyName = "",
+                            bool boolSSLConnect = false) {
 
             bool boolConnected = IsConnected();
                                     /* Indicator That Client Server Connection was Made */
 
             try {
 
-                if (!boolConnected) {
+                if (boolSSLConnect == false || (boolSSLConnect == true && strSSLPrivKeyName != "")) { 
 
-                    // If Not Starting the Server Before Connecting to it
-                    if (!boolStartServer) {
+                    if (!boolConnected) {
 
-                        // If No Hostname or IP Address was Set, Connect with Default Settings
-                        if (strHostNameIP == "") {
+                        // If Not Starting the Server Before Connecting to it
+                        if (!boolStartServer) {
 
-                            if (!(boolConnected = ClientActivate())) {
+                            // If No Hostname or IP Address was Set, Connect with Default Settings
+                            if (strHostNameIP == "") {
 
-                                Log("Connecting client to server using default settings failed.", true);
+                                if (boolSSLConnect) { 
+                                
+                                    if (!(boolConnected = ClientActivateUsingSSL(strSSLPrivKeyName))) {
+
+                                        Log("Connecting client to server using default settings and SSL failed.", true);
+                                    }
+                                }
+                                else if (!(boolConnected = ClientActivate())) {
+
+                                    Log("Connecting client to server using default settings failed.", true);
+                                }
+                            }
+                            else if (nPort != 0) {
+
+                                // Else Connect with Sent Settings
+                                if (boolSSLConnect) { 
+                                
+                                    if (!(boolConnected = ClientActivateByHostPortUsingSSL(strHostNameIP, nPort, strSSLPrivKeyName))) {
+
+                                        Log("Connecting client to server using host, " + strHostNameIP + ", port: " + nPort + " and SSL failed.", true);
+                                    }
+                                }
+                                else if (!(boolConnected = ClientActivateByHostPort(strHostNameIP, nPort))) {
+
+                                    Log("Connecting client to server using host, '" + strHostNameIP + "', port: " + nPort + " failed.", true);
+                                }
+                            }
+                            else {
+
+                                Log("Can not connect client to server using host due to invalid settings.", true);
                             }
                         }
                         else if (nPort != 0) {
 
-                            // Else Connect with Sent Settings
-                            if (!(boolConnected = ClientActivateByHostPort(strHostNameIP, nPort))) {
+                            // If No Default Settings were Sent, Start Server and Connect to it Using Default Settings
+                            if (boolSSLConnect) { 
+                                
+                                if (!(boolConnected = ClientActivateWithServerUsingSSL(strSSLPrivKeyName))) {
 
-                                Log("Connecting client to server using host, '" + strHostNameIP + "', port: " + nPort + " failed.", true);
+                                    Log("Starting server and connecting client to it using SSL failed.", true);
+                                }
+                            }
+                            else if (!(boolConnected = ClientActivateWithServer())) {
+
+                                Log("Starting server and connecting client to it failed.", true);
                             }
                         }
-                        else {
+                        else if (boolSSLConnect) { 
+                        
+                            if (!(boolConnected = ClientActivateWithServerByPortUsingSSL(nPort, strSSLPrivKeyName))) {
 
-                            Log("Can not connect client to server using host due to invalid settings.", true);
+                                Log("Starting server and connecting client to it using port: " + nPort + " failed.", true);
+                            }
                         }
-                    }
-                    else if (nPort != 0) {
+                        else if (!(boolConnected = ClientActivateWithServerByPort(nPort))) {
 
-                        // If No Default Settings were Sent, Start Server and Connect to it Using Default Settings
-                        if (!(boolConnected = ClientActivateWithServer())) {
-
-                            Log("Starting server and connecting client to it failed.", true);
-                        }
-                    }
-                    else if (!(boolConnected = ClientActivateWithServerByPort(nPort))) {
-
-                        Log("Starting server and connecting client to it using port: " + nPort + " failed.", true);
-                    }
-
-                    if (boolConnected) {
-
-                        if (tskCommunicate == null) {
-
-                            tskCommunicate = ComSetup();
+                            Log("Starting server and connecting client to it using port: " + nPort + " failed.", true);
                         }
 
-                        if (tskCommunicate == null) {
+                        if (boolConnected) {
 
-                            tskCommunicate = PeerToPeerComSetup();
+                            if (tskCommunicate == null) {
+
+                                tskCommunicate = ComSetup();
+                            }
+
+                            if (tskCommunicate == null) {
+
+                                tskCommunicate = PeerToPeerComSetup();
+                            }
                         }
-                    }
 
-                    /* Setup to Check for Window Shutdown Events */
-                    sscCheckWindowEnd = new WindowCloseCheckFunct(WindowCloseCheck);
-                    SetConsoleCtrlHandler(sscCheckWindowEnd, true);
+                        /* Setup to Check for Window Shutdown Events */
+                        sscCheckWindowEnd = new WindowCloseCheckFunct(WindowCloseCheck);
+                        SetConsoleCtrlHandler(sscCheckWindowEnd, true);
+                    }
+                }
+                else {
+
+                    Log("Connecting client to server failed. Error: SSL connection's private key file name not set.", true);
                 }
             }
             catch (Exception exError) {
@@ -781,6 +851,22 @@ namespace RevelationsStudios.RevCommProcessor {
         }
 
         /// <summary>
+        ///     Connect to Server Using SSL
+        /// </summary>
+        /// <param name="strSSLPrivKeyName">Name of SSL Private Key</param>
+        /// <param name="strHostNameIP">Optional Hostname or IP Address to Connect, Defaults to 127.0.0.1</param>
+        /// <param name="nPort">Optional Port to Connect to, Defaults to Client Settings</param>
+        /// <param name="boolStartServer">Optional Indicator to Start Local Server, Defaults to False</param>
+        /// <returns>True If Connection is Made, Else False</returns>
+        public bool ConnectWithSSL(string strSSLPrivKeyName, 
+                                   string strHostNameIP = "", 
+                                   int nPort = 0, 
+                                   bool boolStartServer = false) {
+
+            return Connect(strHostNameIP, nPort, boolStartServer, strSSLPrivKeyName, true);
+        }
+
+        /// <summary>
         ///     Setups Communication Thread
         /// </summary>
         /// <returns>Task<returns>
@@ -788,7 +874,6 @@ namespace RevelationsStudios.RevCommProcessor {
 
             await Task.Run(() => Communicate(), ctsCloser.Token);
         }
-
 
         /// <summary>
         ///     Setups Peer-to-Peer Communication Thread
@@ -799,7 +884,6 @@ namespace RevelationsStudios.RevCommProcessor {
             await Task.Run(() => PeerToPeerCommunicate(), ctsCloser.Token);
         }
 
-
         /// <summary>
         ///     Setups Automated Thread for Processing Data Processes
         /// </summary>
@@ -808,6 +892,7 @@ namespace RevelationsStudios.RevCommProcessor {
 
             await Task.Run(() => DoDataProcessResponses(), ctsCloser.Token);
         }
+
         /// <summary>
         ///     Starts HTTP Transmission with "Port" Method Registered to Transaction ID Using Hostname/IP and Optional Port and Async or Synched
         /// </summary>
@@ -1075,11 +1160,16 @@ namespace RevelationsStudios.RevCommProcessor {
         /// </summary>
         /// <param name="strRegObjDesign">Designation of New or Exising Client Message Being Built</param>
         /// <param name="strFuncName">Name of Client Function to be Called Added to Message for Update</param>
-        /// <param name="aobjParams">List of Values to Pass as Parameters to Client Function to be Called Added to Message for Update</param>
+        /// <param name="aobjParams">Optional List of Values to Pass as Parameters to Client Function to be Called Added to Message for Update</param>
         /// <returns>Indicator That Message was Stored</returns>
-        public bool DirectClientMsgAddFuncCall(string strRegObjDesign, string strFuncName, object[] aobjParams) {
+        public bool DirectClientMsgAddFuncCall(string strRegObjDesign, string strFuncName, object[] aobjParams = null) {
 
             bool boolStored = false;/* Indicator That Update was Stored */
+
+            if (aobjParams == null) { 
+            
+                aobjParams = new object[0];
+            }
 
             if (cmDirectMsgSend.DESIGNATION != "") {
 
@@ -1320,6 +1410,8 @@ namespace RevelationsStudios.RevCommProcessor {
                     strFuncName = strSetFuncName,
                     strDesign = null
                 });
+
+                boolSet = true;
             }
 
             return boolSet;
@@ -1409,6 +1501,8 @@ namespace RevelationsStudios.RevCommProcessor {
 
             bool boolSend = false;  /* Indicator That Message was Sent */
 
+            /* TODO - Implement Peer-To-Peer */
+
             if (cmDirectMsgSend.VARUPDATES.Count > 0 || cmDirectMsgSend.FUNCCALLS.Count > 0) {
 
                 SendDirectRawMsg(JsonConvert.SerializeObject(new List<ClientMsg> { cmDirectMsgSend }), strMsgDesign, boolSendServer, boolSendPeerToPeer);
@@ -1469,8 +1563,6 @@ namespace RevelationsStudios.RevCommProcessor {
         /// <returns>True If Data Process was Sent, Else False</returns>
         public bool SendHTTP(int nTransID, int nNewRespID, bool boolAutoRetrieval = true) {
 
-//            CancellationTokenSource ctsNewTaskCloser = new CancellationTokenSource();
-                                    // Task Cancellation Token
 //            DateTime tmStart = DateTime.Now;
                                     /* Start Time of Execution */
             bool boolSend = false;  // Indicator That Message was Sent
@@ -1511,16 +1603,12 @@ namespace RevelationsStudios.RevCommProcessor {
                             }
                         }
 
-                        CancellationTokenSource ctsNewTaskCloser = new CancellationTokenSource();
-
-                        dictSendDataProcessReceivers[nTransID].Add(nNewRespID, ctsNewTaskCloser);
-
                         SendReceiverHTTPSetup(nTransID,
                                               nNewRespID,
                                               fAutoRetLimitInMillis,
                                               boolAutoRetProcessCmd,
                                               boolAutoRetEndTrans,
-                                              ctsNewTaskCloser);
+                                              dictSendHTTPReceivers[nTransID][nNewRespID]);
                     }
                 }
             }
@@ -1583,37 +1671,58 @@ namespace RevelationsStudios.RevCommProcessor {
 
                 if (boolAutoRetrieval) {
 
-                    lock (dictSendDataProcessReceivers) { 
+                    if (boolAsync) {
 
-                        if (!dictSendDataProcessReceivers.ContainsKey(nTransID)) {
+                        lock (dictSendDataProcessReceivers) { 
 
-                            dictSendDataProcessReceivers.Add(nTransID, new Dictionary<int, CancellationTokenSource>());
-                        }
+                            if (!dictSendDataProcessReceivers.ContainsKey(nTransID)) {
+
+                                dictSendDataProcessReceivers.Add(nTransID, new Dictionary<int, CancellationTokenSource>());
+                            }
            
-                        if (!dictSendDataProcessReceivers[nTransID].ContainsKey(nNewRespID)) {
+                            if (!dictSendDataProcessReceivers[nTransID].ContainsKey(nNewRespID)) {
 
-                            CancellationTokenSource ctsNewTaskCloser = new CancellationTokenSource();
+                                    CancellationTokenSource ctsNewTaskCloser = new CancellationTokenSource();
 
-                            dictSendDataProcessReceivers[nTransID].Add(nNewRespID, ctsNewTaskCloser);
+                                    dictSendDataProcessReceivers[nTransID].Add(nNewRespID, ctsNewTaskCloser);
 
-                            if (boolAsync) {
-
-                                SendReceiverDataProcessSetup(nTransID,
-                                                             nNewRespID,
-                                                             fAutoRetLimitInMillis,
-                                                             boolAutoRetProcessCmd,
-                                                             boolAutoRetEndTrans,
-                                                             ctsNewTaskCloser);
+                                    SendReceiverDataProcessSetup(nTransID,
+                                                                 nNewRespID,
+                                                                 fAutoRetLimitInMillis,
+                                                                 boolAutoRetProcessCmd,
+                                                                 boolAutoRetEndTrans,
+                                                                 ctsNewTaskCloser);
                             }
-                            else if (tskAsyncDataProcessor == null) {
+                            else {
 
-                                tskAsyncDataProcessor = AsyncDataProcessorSetup();
+                                Log("During setting up of data process auto retrieval for transaction ID, " + nTransID + ", and response ID, " + nNewRespID +
+                                    ", auto retrieval was already running.");
                             }
                         }
-                        else {
+                    }
+                    else { 
 
-                            Log("During setting up of data process auto retrieval for transaction ID, " + nTransID + ", and response ID, " + nNewRespID +
-                                ", auto retrieval was already running.");
+                        lock (dictSendDataProcessStartTime) { 
+
+                            if (!dictSendDataProcessStartTime.ContainsKey(nTransID)) {
+
+                                dictSendDataProcessStartTime.Add(nTransID, new Dictionary<int, DateTime>());
+                            }
+           
+                            if (!dictSendDataProcessStartTime[nTransID].ContainsKey(nNewRespID)) {
+
+                                dictSendDataProcessStartTime[nTransID].Add(nNewRespID, DateTime.Now);
+                            
+                                if (tskAsyncDataProcessor == null) {
+
+                                    tskAsyncDataProcessor = AsyncDataProcessorSetup();
+                                }
+                            }
+                            else {
+
+                                Log("During setting up of data process auto retrieval for transaction ID, " + nTransID + ", and response ID, " + nNewRespID +
+                                    ", auto retrieval was already running.");
+                            }
                         }
                     }
                 }
@@ -1704,9 +1813,17 @@ namespace RevelationsStudios.RevCommProcessor {
 
             lock (dictSendDataProcessReceivers) { 
 
-                if (dictSendDataProcessReceivers.ContainsKey(nTransID) && dictSendDataProcessReceivers[nTransID].ContainsKey(nRespID)) {
+                if (boolAutoRetEndTrans && dictSendDataProcessReceivers.ContainsKey(nTransID)) {
 
-                    dictSendDataProcessReceivers[nTransID].Remove(nRespID);
+                    foreach (CancellationTokenSource ctsSelect in dictSendDataProcessReceivers[nTransID].Values) {
+
+                        if (ctsSelect != null) { 
+
+                            ctsSelect.Cancel();
+                        }
+                    }
+
+                    dictSendDataProcessReceivers.Remove(nTransID);
                 }
             }
         }
@@ -1714,26 +1831,73 @@ namespace RevelationsStudios.RevCommProcessor {
         /// <summary>
         ///     Process All Data Process Responses
         /// </summary>
-        public void DoDataProcessResponses() {
+        private void DoDataProcessResponses() {
 
             float fSetAutoRetLimitInMillis = AutoRetLimitInMillis;
+                                    /* Limit of Data Process Check */
             bool boolSetAutoRetProcessCmd = AutoRetProcessCmd;
+                                    /* Indicator to Process Returned Commands */
             bool boolSetAutoRetEndTrans = AutoRetEndTrans;
+                                    /* Indicator to End Transaction When Completed */
+            Dictionary<int, List<int>> dictRemoveResps = new Dictionary<int, List<int>>();
+                                    /* List of Transmissions' Responses To Remove */
+            bool boolRestart = false;
+                                    /* Indicator to Restart Check When Response is Not Found */
+            int nTranID = 0;        /* Selected Transaction ID */
 
-            lock (dictSendDataProcessReceivers) { 
+            while (IsConnected()) {
 
-                foreach (KeyValuePair<int, Dictionary<int, CancellationTokenSource>> kvpTrans in dictSendDataProcessReceivers) {
+                lock (dictSendDataProcessStartTime) {
 
-                    foreach (KeyValuePair<int, CancellationTokenSource> kvpResp in kvpTrans.Value) {
+                    foreach (KeyValuePair<int, Dictionary<int, DateTime>> kvpTrans in dictSendDataProcessStartTime) {
 
-                        SendReceiverDataProcess(kvpTrans.Key,
-                                                kvpResp.Key,
-                                                fSetAutoRetLimitInMillis,
-                                                boolSetAutoRetProcessCmd,
-                                                boolSetAutoRetEndTrans,
-                                                kvpResp.Value.Token);
+                        nTranID = kvpTrans.Key;
+
+                        foreach (KeyValuePair<int, DateTime> kvpResp in kvpTrans.Value) {
+
+                            if (DateTime.Now.Subtract(kvpResp.Value).TotalMilliseconds < fAutoRetLimitInMillis) {
+
+                                if (boolRestart = (GetDataProcessResponse(nTranID, kvpResp.Key, boolAutoRetProcessCmd, boolAutoRetEndTrans) == "")) {
+
+                                    break;
+                                }
+                            }
+                            else { 
+                            
+                                if (!dictRemoveResps.ContainsKey(nTranID)) {
+
+                                    dictRemoveResps.Add(nTranID, new List<int>());
+                                }
+
+                                dictRemoveResps[nTranID].Add(kvpResp.Key);
+                            }
+                        }
+
+                        if (boolRestart) {
+
+                            break;
+                        }
                     }
+
+                    foreach (KeyValuePair<int, List<int>> kvpRemoveIDs in dictRemoveResps) {
+
+                        nTranID = kvpRemoveIDs.Key;
+
+                        foreach (int nRespID in kvpRemoveIDs.Value) {
+
+                            dictSendDataProcessStartTime[nTranID].Remove(nRespID);
+                        }
+
+                        if (boolSetAutoRetEndTrans && dictSendDataProcessStartTime[nTranID].Count <= 0) { 
+                        
+                            dictSendDataProcessStartTime.Remove(nTranID);
+                        }
+                    }
+
+                    dictRemoveResps.Clear();
                 }
+
+                Task.Delay(1);
             }
         }
 
@@ -1948,40 +2112,19 @@ namespace RevelationsStudios.RevCommProcessor {
 
                             RunRetFunc(sfiSelect, strRetMsg);
                         }
+                    }
 
-                        if (boolDeleteTrans) {
+                    if (boolDeleteTrans) {
+
+                        if (dictSendStorage["DATAPROCESS"].ContainsKey(nTransID)) { 
+
+                            dictSendStorage["DATAPROCESS"].Remove(nTransID);
+                        }
+
+                        if (dictSendFuncs["DATAPROCESS"].ContainsKey(nTransID)) {
 
                             dictSendFuncs["DATAPROCESS"].Remove(nTransID);
                         }
-                    }
-
-                    if (boolDeleteTrans && dictSendStorage["DATAPROCESS"].ContainsKey(nTransID)) {
-
-                        dictSendStorage["DATAPROCESS"].Remove(nTransID);
-
-                        lock (dictSendDataProcessReceivers) { 
-
-                            if (dictSendDataProcessReceivers.ContainsKey(nTransID)) {
-
-                                foreach (KeyValuePair<int, CancellationTokenSource> kvpSelect in dictSendDataProcessReceivers[nTransID]) {
-
-                                    if (kvpSelect.Key != nRespID) {
-
-                                        kvpSelect.Value.Cancel();
-                                    }
-                                }
-
-                                dictSendDataProcessReceivers.Remove(nTransID);
-                            }
-                        }
-                    }
-                }
-
-                lock (dictSendDataProcessReceivers) { 
-
-                    if (dictSendDataProcessReceivers.ContainsKey(nTransID) && dictSendDataProcessReceivers[nTransID].ContainsKey(nRespID)) {
-
-                        dictSendDataProcessReceivers[nTransID].Remove(nRespID);
                     }
                 }
             }
@@ -2075,6 +2218,28 @@ namespace RevelationsStudios.RevCommProcessor {
         }
 
         /// <summary>
+        ///     Clears Direct Messages
+        /// </summary>
+        /// <param name="strDesign">Optional Designation of Messages to Delete, Default Deletes All Direct Messages</param>
+        /// <returns></returns>
+        public bool ClearDirectMsgs(string strDesign = "") {
+
+            bool boolSuccessful = false;
+            // Indicator That Deletion was Successful
+
+            if (strDesign == "") {
+
+                boolSuccessful = ClientClearDirectMsgs();
+            }
+            else {
+
+                boolSuccessful = ClientClearDirectMsgsWithDesign(strDesign);
+            }
+
+            return boolSuccessful;
+        }
+
+        /// <summary>
         ///     Removes Data Map and its Setups
         /// </summary>
         /// <param name="strDesign">Designation of Data Map to Remove</param>
@@ -2084,6 +2249,127 @@ namespace RevelationsStudios.RevCommProcessor {
 
                 dictDataMaps.Remove(strDesign);
             }
+        }
+
+        /// <summary>
+        ///     Starts a File Download from Server Using its Designation
+        /// </summary>
+        /// <param name="strFileDesign">Designation of File to Start Download For</param>
+        public void FileDownloadStart(string strFileDesign) {
+
+            ClientGetStreamFile(strFileDesign);
+        }
+        /// <summary>
+        ///     Checks If File Download is Completed and Saves it Using its Designation 
+        /// </summary>
+        /// <param name="strFileDesign">Designation of File to be Downloaded</param>
+        /// <param name="strFilePathOverride">Optional Directory Destination can be Set, Else it Downloads to Default Directory</param>
+        /// <returns>True If Specified File were Downloaded Successfully, Else False If Failure or Specified File Has Not Completed Downloading<returns>
+        public bool FileDownloadFinish(string strFileDesign, string strFilePathOverride = "") {
+
+            bool boolDownloaded = false;
+                                    /* Indicator That File or Files were Downloaded */
+            int nFileLen = ClientCheckStreamFileReady(strFileDesign);
+                                    /* Check If File is Ready for Download, and Get Its Length */
+            // int nFilePathLen = 0;/* Length of File's Name and Path */
+/*             byte[] abyteMsg = new byte[nFileLen];
+                                    /* Returned Message */
+/*             StringBuilder sbFilePathMsg = new StringBuilder(nFilePathLength);
+                                    /* Returned Message */
+ //            string strFileDownloadPath = sbFilePathMsg.ToString();
+                                    /* File Path from Downloaded File */
+//             string[] aFileDownloadPathList = strFileDownloadPath.Split('\\');
+                                    /* List of Peices of Download Path */
+
+            try {
+
+                if (nFileLen > 0) {
+
+                    int nFilePathLen = ClientGetStreamFilePathLength(strFileDesign);
+
+                    if (nFilePathLen > 0) {
+
+                        byte[] abyteMsg = new byte[nFileLen];
+                        StringBuilder sbFilePathMsg = new StringBuilder(nFilePathLen);
+
+                        if (ClientCheckStreamFileDownload(strFileDesign, 
+                                                          sbFilePathMsg, 
+                                                          nFilePathLen, 
+                                                          Marshal.UnsafeAddrOfPinnedArrayElement(abyteMsg, 0))) {
+
+                            if (strFilePathOverride == "") {
+
+                                strFilePathOverride = sbFilePathMsg.ToString();
+                            }
+                            else {
+
+                                string strFileDownloadPath = sbFilePathMsg.ToString();
+
+                                if (strFilePathOverride.IndexOf('\\') != strFilePathOverride.Length - 1) {
+
+
+                                    strFilePathOverride += "\\";
+                                }
+
+                                string[] aFileDownloadPathList = strFileDownloadPath.Split('\\');
+
+                                if (aFileDownloadPathList.Length > 0) {
+
+                                    strFilePathOverride += aFileDownloadPathList[aFileDownloadPathList.Length - 1];
+                                }
+                            }
+
+                            File.WriteAllBytes(strFilePathOverride, abyteMsg);
+
+                            boolDownloaded = true;
+                        }
+                    }
+                    else {
+
+                        Log("Downloading file, designation: " + strFileDesign + " failed, due to no file path length found.", true);
+                    }
+                }
+            }
+            catch(Exception exError) {
+
+                Log("Downloading file, designation: " + strFileDesign + " failed. Message: " + exError.Message, true);
+                throw exError;
+            }
+
+            return boolDownloaded;
+        }
+
+        /// <summary>
+        ///     Clear Download File Information from Stream
+        /// </summary>
+        /// <param name="strFileDesign"></param>
+        public void ClearStreamFileDownload(string strFileDesign) {
+
+            ClientClearStreamFileDownload(strFileDesign);
+        }
+
+        /// <summary>
+        ///     Gets List of Files by Designations That Are Available for Download
+        /// </summary>
+        /// <returns>List of Designation of Files for Download</returns>
+        public List<string> GetAvailableFileList() {
+            
+            StringBuilder sbMsg = new StringBuilder(BUFFERSIZE); 
+                                    /* Returned Message */
+            StringBuilder sbRetLen = new StringBuilder(MAXBUFFERSIZEDIGITS);
+                                    /* Length for Retrieved Message */
+            List<string> ltstrFileList = new List<string>();
+                                    /* List of Downloadable File Designation */
+              
+            sbRetLen.Append(BUFFERSIZE.ToString().PadLeft(MAXBUFFERSIZEDIGITS, '0'));
+            ClientGetStreamFileList(sbMsg, sbRetLen);
+
+            if (sbMsg.ToString().Trim() != "") {
+
+                ltstrFileList = JsonConvert.DeserializeObject<DownloadFileList>(sbMsg.ToString().Trim()).STREAMFILELIST;
+            }
+
+            return ltstrFileList;
         }
 
         /// <summary>
@@ -2111,7 +2397,10 @@ namespace RevelationsStudios.RevCommProcessor {
 
                     foreach (KeyValuePair<int, CancellationTokenSource> kvpResp in kvpTrans.Value) {
 
-                        kvpResp.Value.Cancel();
+                        if (kvpResp.Value != null) { 
+
+                            kvpResp.Value.Cancel();
+                        }
                     }
                 }
             }
@@ -2415,7 +2704,7 @@ namespace RevelationsStudios.RevCommProcessor {
 
                             /* If Any of the Transmission's Response's Tasks are not Cancelled, 
                                Do Not Delete Transmission's Receiver */
-                            if (!(boolTransDelete = kvpResp.Value.IsCancellationRequested)) {
+                            if (kvpResp.Value != null && !(boolTransDelete = kvpResp.Value.IsCancellationRequested)) {
 
                                 break;
                             }

@@ -532,11 +532,6 @@ struct ClientServerInfo {
 										paiSelected = NULL;
 										boolConnectStarted = true;
 										boolConnected = true;
-
-										if (!AddSendMsg("GETSTREAMFILELIST")) {
-
-											csiOpInfo.AddLogErrorMsg("During client-server connection for server, sending message 'GETSTREAMFILELIST' failed.");
-										}
 									}
 									else {
 
@@ -559,6 +554,11 @@ struct ClientServerInfo {
 
 							AddLogErrorMsg("During client-server connection for server, getting possible address information failed.");
 						}
+					}
+
+					if (boolConnected && !AddSendMsg("GETSTREAMFILELIST")) {
+
+						csiOpInfo.AddLogErrorMsg("During client-server connection for server, sending message 'GETSTREAMFILELIST' failed.");
 					}
 				}
 				else {

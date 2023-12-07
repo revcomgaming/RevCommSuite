@@ -367,7 +367,6 @@ class cDataInteract {
 	    global $CONFIG;
 	    
 	    $this -> Execute('INSERT INTO ' . $CONFIG -> GetMsgTableName() . ' (' . $CONFIG -> GetMsgValueColumnName() . ') VALUES (\'' . $strCommandMsg . '\')');
-	    global $CONFIG;
 	}
 	
 	/* Check If Warning Should be Sent Out, and If Anything Fails, Ignore it */
