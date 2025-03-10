@@ -9,7 +9,6 @@ using System.Text;
 using System.Globalization;
 using System.ComponentModel;
 using Newtonsoft.Json;
-using System.Linq;
 
 namespace RevelationsStudios.RevCommProcessor {
 
@@ -76,13 +75,15 @@ namespace RevelationsStudios.RevCommProcessor {
                                     /* Size of Encryption Key */
                           ENCRYPTIVBLOCKSIZE = 16;
                                     /* Size of Encryption IV Block */
-        private const BindingFlags METHODFIELDMODIFIERTYPES = BindingFlags.Public | BindingFlags.Instance |
-                                                              BindingFlags.Static | BindingFlags.NonPublic;
-                                    /* Settings for Finding Variables and Methods by Modifier Type */    
+        private const BindingFlags METHODPERMISSIONTYPES = BindingFlags.Public | BindingFlags.Instance |
+                                                           BindingFlags.Static | BindingFlags.NonPublic;
+                                    /* Settings for Finding Variables and Methods by Modified Type */                         
+        private static bool boolLogFileNotLocked = true;
+                                    /* Indicator That File is Not Locked */
+        private static Queue<string> qstrLogFileMsgWaiting = new Queue<string>();
+                                    /* Waiting Log File Messages for When File is not Locked */
         private Task tskCommunicate = null,
                                     /* Communication Task */
-                     tskPeerToPeerCommunicate = null,
-                                    /* "Peer To Peer" Communication Listener Task */
                      tskAsyncDataProcessor = null;
                                     /* Processing Asynchronous Data Processing Returns Task */
         private CancellationTokenSource ctsCloser = new CancellationTokenSource();
@@ -246,8 +247,8 @@ namespace RevelationsStudios.RevCommProcessor {
         private static extern void ClientSendDataProcess(int nTransID, int nNewRespID, string strDataDesign, bool boolAsync);
                                     /* Sends Data Process Execution Message */
 
-        [DllImport("RevCommClient64.dll", EntryPoint = "GetDataProcessResponse")]
-        private static extern void ClientGetDataProcessResponse(int nTransID, int nRespID, StringBuilder sbRetMsg, StringBuilder sbRetMsgLen);
+        [DllImport("RevCommClient64.dll", EntryPoint = "GetDataProcessResponsePointer")]
+        private static extern IntPtr ClientGetDataProcessResponse(int nTransID, int nRespID);
                                     /* Gets Response Returned from Data Process Execution Message, Before Deleting it from Response Queue and
                                      * Outputs Response Message as a String Indicated by the Response ID and Communication Transmission ID is Valid, Else Blank String */
 
@@ -260,8 +261,8 @@ namespace RevelationsStudios.RevCommProcessor {
         private static extern void ClientSendHTTP(int nTransID, int nNewRespID);
                                     /* Send Stored HTTP Message */
 
-        [DllImport("RevCommClient64.dll", EntryPoint = "GetHTTPResponse")]
-        private static extern void ClientGetHTTPResponse(int nTransID, int nRespID, StringBuilder sbRetMsg, StringBuilder sbRetMsgLen);
+        [DllImport("RevCommClient64.dll", EntryPoint = "GetHTTPResponsePointer")]
+        private static extern IntPtr ClientGetHTTPResponse(int nTransID, int nRespID);
                                     /* Gets Response Returned from Send Message, Before Deleting it from Response Queue and
                                      * Outputs Response Message as a String Indicated by the Response ID and Communication Transmission ID is Valid, Else Blank String */
 
@@ -270,13 +271,13 @@ namespace RevelationsStudios.RevCommProcessor {
                                     /* Check If Response Returned from Send Message, Before Deleting it from Response Queue and
                                      * Outputs Length of Response Message Indicated by the Response ID and Communication Transmission ID If Exists or Has Values, Else Returns 0 */
 
-        [DllImport("RevCommClient64.dll", EntryPoint = "GetStreamMsg")]
-        private static extern void ClientGetStreamMsg(int nTransID, StringBuilder sbRetMsg, StringBuilder sbRetMsgLen);
+        [DllImport("RevCommClient64.dll", EntryPoint = "GetStreamMsgPointer")]
+        private static extern void ClientGetStreamMsg(int nTransID);
                                     /* Gets a Waiting Message from Stream, Before Deleting it from the Wait Queue and
                                      * Outputs Message as a String If It Exists, Else Blank String */
 
-        [DllImport("RevCommClient64.dll", EntryPoint = "GetStreamMsgNext")]
-        private static extern void ClientGetStreamMsgNex(StringBuilder sbRetMsg, StringBuilder sbRetMsgLen);
+        [DllImport("RevCommClient64.dll", EntryPoint = "GetStreamMsgNextPointer")]
+        private static extern void ClientGetStreamMsgNext();
                                     /* Gets Next Waiting Message from Any Stream, Before Deleting it from the Wait Queue and
                                      * Outputs Message as a String If It Exists, Else Blank String */
 
@@ -296,13 +297,13 @@ namespace RevelationsStudios.RevCommProcessor {
         private static extern bool ClientClearStreamMsgsByIDReady(int nTransID);
                                     /* Sends Stream Messages with Designation on Client */
 
-        [DllImport("RevCommClient64.dll", EntryPoint = "GetDirectMsg")]
-        private static extern void ClientGetDirectMsg(string strDesign, StringBuilder sbRetMsg, StringBuilder sbRetMsgLen);
+        [DllImport("RevCommClient64.dll", EntryPoint = "GetDirectMsgPointer")]
+        private static extern IntPtr ClientGetDirectMsg(string strDesign);
                                     /* Gets a Specified Waiting Direct Message, Before Deleting it from the Wait Queue and
                                      * Outputs Message as a String If It Exists, Else Blank String */
 
-        [DllImport("RevCommClient64.dll", EntryPoint = "GetDirectMsgNext")]
-        private static extern void ClientGetDirectMsgNext(StringBuilder sbRetMsg, StringBuilder sbRetMsgLen);
+        [DllImport("RevCommClient64.dll", EntryPoint = "GetDirectMsgNextPointer")]
+        private static extern IntPtr ClientGetDirectMsgNext();
                                     /* Gets a Waiting Direct Message, Before Deleting it from the Wait Queue and
                                      * Outputs Message as a String If It Exists, Else Blank String */
 
@@ -366,13 +367,13 @@ namespace RevelationsStudios.RevCommProcessor {
         private static extern void ClientClose(int nTransID);
                                     /* Closes Specified Transmission */
 
-        [DllImport("RevCommClient64.dll", EntryPoint = "GetLogError")]
-        private static extern void ClientGetLogError(StringBuilder sbRetMsg, StringBuilder sbRetMsgLen);
+        [DllImport("RevCommClient64.dll", EntryPoint = "GetLogErrorPointer")]
+        private static extern IntPtr ClientGetLogError();
                                     /* Gets Log Error Message Before Clearing its Information and
                                      * Outputs Error Message as a String If It Exists, Else Blank String */
 
-        [DllImport("RevCommClient64.dll", EntryPoint = "GetDisplayError")]
-        private static extern void ClientGetDisplayError(StringBuilder sbRetMsg, StringBuilder sbRetMsgLen);
+        [DllImport("RevCommClient64.dll", EntryPoint = "GetDisplayErrorPointer")]
+        private static extern IntPtr ClientGetDisplayError();
                                     /* Gets Log Error Message Before Clearing its Information and 
                                      * Outputs Error Message as a String If It Exists, Else Blank String */
 
@@ -420,20 +421,20 @@ namespace RevelationsStudios.RevCommProcessor {
         private static extern bool ClientIsConnected();
                                     /* Finds If Client is Connected to Server */
 
-        [DllImport("RevCommClient64.dll", EntryPoint = "DebugReceived")]
-        private static extern void ClientDebugReceived(int nMsgIndex, StringBuilder sbMsg, StringBuilder sbRetMsgLen);
+        [DllImport("RevCommClient64.dll", EntryPoint = "DebugReceivedPointer")]
+        private static extern IntPtr ClientDebugReceived(int nMsgIndex);
                                     /* Debug for Getting Message from Receiving Queue by Message Index */
 
-        [DllImport("RevCommClient64.dll", EntryPoint = "DebugToSend")]
-        private static extern void ClientDebugToSend(int nMsgIndex, StringBuilder sbMsg, StringBuilder sbRetMsgLen);
+        [DllImport("RevCommClient64.dll", EntryPoint = "DebugToSendPointer")]
+        private static extern IntPtr ClientDebugToSend(int nMsgIndex);
                                     /* Debug for Getting Message from Sending Queue by Message Index */
 
-        [DllImport("RevCommClient64.dll", EntryPoint = "DebugReceivedStored")]
-        private static extern void ClientDebugReceivedStored(int nMsgIndex, StringBuilder sbMsg, StringBuilder sbRetMsgLen);
+        [DllImport("RevCommClient64.dll", EntryPoint = "DebugReceivedStoredPointer")]
+        private static extern IntPtr ClientDebugReceivedStored(int nMsgIndex);
                                     /* Debug for Getting Message from Receiving Stored Queue by Message Index */
 
-        [DllImport("RevCommClient64.dll", EntryPoint = "DebugToSendStored")]
-        private static extern void ClientDebugToSendStored(int nMsgIndex, StringBuilder sbMsg, StringBuilder sbRetMsgLen);
+        [DllImport("RevCommClient64.dll", EntryPoint = "DebugToSendStoredPointer")]
+        private static extern IntPtr ClientDebugToSendStored(int nMsgIndex);
                                     /* Debug for Getting Message from Sending Stored Queue by Message Index */
 
         [DllImport("RevCommClient64.dll", EntryPoint = "DebugSendQueueCount")]
@@ -495,10 +496,6 @@ namespace RevelationsStudios.RevCommProcessor {
         [DllImport("RevCommClient64.dll", EntryPoint = "Communicate")]
         static extern void ClientCommunicate();
                                     /* Process Client Communications */
-
-        [DllImport("RevCommClient64.dll", EntryPoint = "PeerToPeerCommunicate")]
-        static extern void ClientPeerToPeerCommunicate();
-                                    /* Process Client "Peer-to-Peer" Communications */
 
         public RevCommProcessor() {
 
@@ -567,7 +564,7 @@ namespace RevelationsStudios.RevCommProcessor {
 
                                 if (rciRegSelect.objReg != null) {
 
-                                    rciRegSelect.tyClass.GetField(cmvVarUpdates.NAME, METHODFIELDMODIFIERTYPES)
+                                    rciRegSelect.tyClass.GetField(cmvVarUpdates.NAME, METHODPERMISSIONTYPES)
                                                         .SetValue(rciRegSelect.objReg, cmvVarUpdates.VALUE);
                                 }
                             }
@@ -583,7 +580,7 @@ namespace RevelationsStudios.RevCommProcessor {
                                 nFuncParamCount = ltobjFuncParamValues.Count;
 
                                 /* Check Object's Methods for Find Method with Matching Signature */
-                                foreach (MethodInfo miFuncSelect in rciRegSelect.tyClass.GetMethods(METHODFIELDMODIFIERTYPES)) {
+                                foreach (MethodInfo miFuncSelect in rciRegSelect.tyClass.GetMethods(METHODPERMISSIONTYPES)) {
 
                                     /* If Version of Method Found, Check for Matching Parameters with Trailing Optional Ones */
                                     if (miFuncSelect.Name.ToLower() == strFuncName.ToLower()) { 
@@ -629,7 +626,7 @@ namespace RevelationsStudios.RevCommProcessor {
                                             /* If Selected Method Signature Matches Sent Parameters, Method was Confirmed, and the Count of Parameter Count is the Same as Sent,
                                                Exit Loop with the Selected Signature for Invoking, Else The Last Match will be Invoked */
                                             if (boolFuncValid &&
-                                                (miFuncFound = rciRegSelect.tyClass.GetMethod(strFuncName, METHODFIELDMODIFIERTYPES, null, lttyTypeList.ToArray(), null)) != null &&
+                                                (miFuncFound = rciRegSelect.tyClass.GetMethod(strFuncName, METHODPERMISSIONTYPES, null, lttyTypeList.ToArray(), null)) != null &&
                                                 nFuncParamCount == nParamCountFound) {
 
                                                 break;
@@ -656,7 +653,7 @@ namespace RevelationsStudios.RevCommProcessor {
                                     if (rciRegSelect.objReg != null) {
 
                                         miFuncFound.Invoke(rciRegSelect.objReg,
-                                                           METHODFIELDMODIFIERTYPES | BindingFlags.OptionalParamBinding, 
+                                                           METHODPERMISSIONTYPES | BindingFlags.OptionalParamBinding, 
                                                            null,
                                                            ltobjFuncParamValues.ToArray(), 
                                                            CultureInfo.InvariantCulture);
@@ -664,7 +661,7 @@ namespace RevelationsStudios.RevCommProcessor {
                                     else {
 
                                         miFuncFound.Invoke(Activator.CreateInstance(rciRegSelect.tyClass),
-                                                           METHODFIELDMODIFIERTYPES | BindingFlags.OptionalParamBinding, 
+                                                           METHODPERMISSIONTYPES | BindingFlags.OptionalParamBinding, 
                                                            null,
                                                            ltobjFuncParamValues.ToArray(), 
                                                            CultureInfo.InvariantCulture); ;
@@ -682,8 +679,17 @@ namespace RevelationsStudios.RevCommProcessor {
                 /* If Not Getting a List of Updated Rows Returned by the Database */
                 if (!strJSONMsg.Contains("[{\"rows\":")) { 
 
-                    Log("Processing incoming messages failed. Exception: " + exError.Message + ". Backtrace: " +
-                        string.Join(" || ", exError.StackTrace), true);
+                    if (exError.InnerException != null) {
+
+                        Log("Processing incoming messages failed. Exception: " + exError.Message + 
+                            ". Inner Exception: " + exError.InnerException.Message + ". Backtrace: " +
+                            string.Join(" || ", exError.StackTrace), true);
+                    }
+                    else { 
+                    
+                        Log("Processing incoming messages failed. Exception: " + exError.Message + 
+                            ". Backtrace: " + string.Join(" || ", exError.StackTrace), true);
+                    }
                 }
             }
         }
@@ -701,7 +707,7 @@ namespace RevelationsStudios.RevCommProcessor {
 
             if (sfiExecute.rciObj.objReg != null) {
 
-                if ((miFuncSelect = sfiExecute.rciObj.tyClass.GetMethod(sfiExecute.strFuncName, METHODFIELDMODIFIERTYPES)) != null) {
+                if ((miFuncSelect = sfiExecute.rciObj.tyClass.GetMethod(sfiExecute.strFuncName, METHODPERMISSIONTYPES)) != null) {
 
                     List<object> ltobjFuncParamValues = new List<object>();
 
@@ -713,7 +719,7 @@ namespace RevelationsStudios.RevCommProcessor {
                     try {
 
                         miFuncSelect.Invoke(sfiExecute.rciObj.objReg,
-                                            METHODFIELDMODIFIERTYPES | BindingFlags.OptionalParamBinding,
+                                            METHODPERMISSIONTYPES | BindingFlags.OptionalParamBinding,
                                             null,
                                             ltobjFuncParamValues.ToArray(),
                                             CultureInfo.InvariantCulture);
@@ -825,11 +831,6 @@ namespace RevelationsStudios.RevCommProcessor {
 
                                 tskCommunicate = ComSetup();
                             }
-
-                            if (tskCommunicate == null) {
-
-                                tskCommunicate = PeerToPeerComSetup();
-                            }
                         }
 
                         /* Setup to Check for Window Shutdown Events */
@@ -873,15 +874,6 @@ namespace RevelationsStudios.RevCommProcessor {
         private async Task ComSetup() {
 
             await Task.Run(() => Communicate(), ctsCloser.Token);
-        }
-
-        /// <summary>
-        ///     Setups Peer-to-Peer Communication Thread
-        /// </summary>
-        /// <returns>Task<returns>
-        private async Task PeerToPeerComSetup() {
-
-            await Task.Run(() => PeerToPeerCommunicate(), ctsCloser.Token);
         }
 
         /// <summary>
@@ -1057,10 +1049,14 @@ namespace RevelationsStudios.RevCommProcessor {
 
                 if (DebugMode()) {
 
-                    if ((strDebugMsg = Debug()) != "") {
+                   if ((strDebugMsg = Debug()) != "") {
 
                         Log(strDebugMsg);
-                    }
+                   }
+                   else if (qstrLogFileMsgWaiting.Count > 0) {
+
+                        Log();
+                   }
                 }
 
                 if (AutoRetProcessCmd && !RunAutoDirectMsgByDesign()) {
@@ -1069,34 +1065,6 @@ namespace RevelationsStudios.RevCommProcessor {
                 }
 
                 RunAutoRetCleanup();
-
-                Task.Delay(1, ctClose);
-            }
-        }
-
-        /// <summary>
-        ///     Processes Communications from Peer-to-Peer Clients
-        /// </summary>
-        private void PeerToPeerCommunicate() {
-
-            string strDebugMsg = "";/* Debug Message */
-            CancellationToken ctClose = ctsCloser.Token;
-                                    /* Control for Closing Tasks */
-
-            while (IsConnected()) {
-
-                ClientPeerToPeerCommunicate();
-
-                GetLogError();
-                GetDisplayError();
-
-                if (DebugMode()) {
-
-                    if ((strDebugMsg = Debug()) != "") {
-
-                        Log(strDebugMsg);
-                    }
-                }
 
                 Task.Delay(1, ctClose);
             }
@@ -1115,8 +1083,9 @@ namespace RevelationsStudios.RevCommProcessor {
           
             if (!ValidateTransID(nNewTransID)) {
 
-                dictSendStorage["DATAPROCESS"][nNewTransID] = new ServerMsg { DESIGNATION = strDataDesign,
-                                                                              PARAMS = new Dictionary<string, object>() };
+                dictSendStorage["DATAPROCESS"].Add(nNewTransID, 
+                                                   new ServerMsg { DESIGNATION = strDataDesign,
+                                                                   PARAMS = new Dictionary<string, object>() });
                 boolStarted = true;
             }
 
@@ -1261,7 +1230,7 @@ namespace RevelationsStudios.RevCommProcessor {
 
             ClearDataMap(strDesign);
 
-            if ((miFuncSelect = tySourceClass.GetMethod(strSetFuncName, METHODFIELDMODIFIERTYPES)) != null) {
+            if ((miFuncSelect = tySourceClass.GetMethod(strSetFuncName, METHODPERMISSIONTYPES)) != null) {
 
                 dictDataMaps.Add(strDesign, new DataMap() {
 
@@ -1435,7 +1404,7 @@ namespace RevelationsStudios.RevCommProcessor {
 
                 if (dmSelect.nType == 1) {
 
-                    dmSelect.rciObj.tyClass.GetField(dmSelect.strFuncVarName, METHODFIELDMODIFIERTYPES)
+                    dmSelect.rciObj.tyClass.GetField(dmSelect.strFuncVarName, METHODPERMISSIONTYPES)
                                            .SetValue(dmSelect.rciObj.objReg, objValue);
                     SendDataMapMsg(strDesign, objValue);
                 }
@@ -1839,6 +1808,8 @@ namespace RevelationsStudios.RevCommProcessor {
                                     /* Indicator to Process Returned Commands */
             bool boolSetAutoRetEndTrans = AutoRetEndTrans;
                                     /* Indicator to End Transaction When Completed */
+            Dictionary<int, Dictionary<int, DateTime>> dictWaitingRespToProcess = new Dictionary<int, Dictionary<int, DateTime>>();
+                                    /* List of Data Processes Response Messages to Process with Start Time */
             Dictionary<int, List<int>> dictRemoveResps = new Dictionary<int, List<int>>();
                                     /* List of Transmissions' Responses To Remove */
             bool boolRestart = false;
@@ -1849,53 +1820,78 @@ namespace RevelationsStudios.RevCommProcessor {
 
                 lock (dictSendDataProcessStartTime) {
 
-                    foreach (KeyValuePair<int, Dictionary<int, DateTime>> kvpTrans in dictSendDataProcessStartTime) {
+                    foreach (KeyValuePair<int, Dictionary<int, DateTime>> kvpTrans in dictSendDataProcessStartTime) { 
 
                         nTranID = kvpTrans.Key;
 
-                        foreach (KeyValuePair<int, DateTime> kvpResp in kvpTrans.Value) {
+                        if (!dictWaitingRespToProcess.ContainsKey(nTranID)) { 
+                        
+                            dictWaitingRespToProcess.Add(nTranID, kvpTrans.Value);
+                        }
+                        else { 
+                        
+                            foreach (KeyValuePair<int, DateTime> kvpResp in kvpTrans.Value) { 
 
-                            if (DateTime.Now.Subtract(kvpResp.Value).TotalMilliseconds < fAutoRetLimitInMillis) {
-
-                                if (boolRestart = (GetDataProcessResponse(nTranID, kvpResp.Key, boolAutoRetProcessCmd, boolAutoRetEndTrans) == "")) {
-
-                                    break;
+                                if (!dictWaitingRespToProcess[nTranID].ContainsKey(kvpResp.Key)) { 
+                                    
+                                    dictWaitingRespToProcess[nTranID].Add(kvpResp.Key, kvpResp.Value);
                                 }
-                            }
-                            else { 
-                            
-                                if (!dictRemoveResps.ContainsKey(nTranID)) {
-
-                                    dictRemoveResps.Add(nTranID, new List<int>());
+                                else { 
+                                 
+                                    RevCommProcessor.Log("During registering data processes for syncrohonous processing for transaction ID, " + nTranID + ", and response ID, " + kvpResp.Key +
+                                                         ", was already registered.");
                                 }
-
-                                dictRemoveResps[nTranID].Add(kvpResp.Key);
                             }
                         }
+                    }
 
-                        if (boolRestart) {
+                    dictSendDataProcessStartTime.Clear();
+                }
+
+                foreach (KeyValuePair<int, Dictionary<int, DateTime>> kvpTrans in dictWaitingRespToProcess) {
+
+                    nTranID = kvpTrans.Key;
+
+                    foreach (KeyValuePair<int, DateTime> kvpResp in kvpTrans.Value) {
+
+                        if ((DateTime.Now.Subtract(kvpResp.Value).TotalMilliseconds < fAutoRetLimitInMillis) && 
+                            (boolRestart = (GetDataProcessResponse(nTranID, kvpResp.Key, boolAutoRetProcessCmd, boolAutoRetEndTrans) == ""))) {
 
                             break;
                         }
-                    }
+                        else { 
+                            
+                            if (!dictRemoveResps.ContainsKey(nTranID)) {
 
-                    foreach (KeyValuePair<int, List<int>> kvpRemoveIDs in dictRemoveResps) {
+                                dictRemoveResps.Add(nTranID, new List<int>());
+                            }
 
-                        nTranID = kvpRemoveIDs.Key;
-
-                        foreach (int nRespID in kvpRemoveIDs.Value) {
-
-                            dictSendDataProcessStartTime[nTranID].Remove(nRespID);
-                        }
-
-                        if (boolSetAutoRetEndTrans && dictSendDataProcessStartTime[nTranID].Count <= 0) { 
-                        
-                            dictSendDataProcessStartTime.Remove(nTranID);
+                            dictRemoveResps[nTranID].Add(kvpResp.Key);
                         }
                     }
 
-                    dictRemoveResps.Clear();
+                    if (boolRestart) {
+
+                        break;
+                    }
                 }
+
+                foreach (KeyValuePair<int, List<int>> kvpRemoveIDs in dictRemoveResps) {
+
+                    nTranID = kvpRemoveIDs.Key;
+
+                    foreach (int nRespID in kvpRemoveIDs.Value) {
+
+                        dictWaitingRespToProcess[nTranID].Remove(nRespID);
+                    }
+
+                    if (boolSetAutoRetEndTrans && dictWaitingRespToProcess[nTranID].Count <= 0) { 
+                        
+                        dictWaitingRespToProcess.Remove(nTranID);
+                    }
+                }
+
+                dictRemoveResps.Clear();
 
                 Task.Delay(1);
             }
@@ -1927,8 +1923,7 @@ namespace RevelationsStudios.RevCommProcessor {
 
             cmDirectMsgSend = new ClientMsg() { DESIGNATION = "",
                                                 VARUPDATES = new List<ClientMsgVarUpdates>(),
-                                                FUNCCALLS = new List<ClientMsgFunCalls>()
-                                              };
+                                                FUNCCALLS = new List<ClientMsgFunCalls>() };
         }
 
         /// <summary>
@@ -1938,29 +1933,18 @@ namespace RevelationsStudios.RevCommProcessor {
         /// <param name="boolProcessCmd">Optional Indicator to Process Message Registered Object Update</param>
         /// <returns>Retrieved Direct Message</returns> 
         public string GetDirectMsg(string strDesign, bool boolProcessCmd = false) {
-
+                        
             int nMsgLen = ClientCheckDirectMsgsWithDesignReady(strDesign);
                                     /* Length of Return Message */
-/*            StringBuilder sbMsg = new StringBuilder(nMsgLen),
-                                    /* Returned Message */
-/*                          sbRetLen = new StringBuilder(MAXBUFFERSIZEDIGITS);
-                                    /* Length for Retrieved Message */
             string strRetMsg = "";  /* Direct Message to Return */
 
             if (nMsgLen > 0) {
 
-                StringBuilder sbMsg = new StringBuilder(nMsgLen),
-                              sbRetLen = new StringBuilder(MAXBUFFERSIZEDIGITS);
-
-                sbRetLen.Append(nMsgLen.ToString().PadLeft(MAXBUFFERSIZEDIGITS, '0'));
-
-                ClientGetDirectMsg(strDesign, sbMsg, sbRetLen);
-                strRetMsg = sbMsg.ToString();
-                nMsgLen = int.Parse(sbRetLen.ToString());
+                strRetMsg = GetClientReturnValue(ClientGetDirectMsg(strDesign));
 
                 if (boolProcessCmd && nMsgLen > 0 && strRetMsg != "") {
 
-                    ProcessIncoming(sbMsg.ToString());
+                    ProcessIncoming(strRetMsg);
                 }
 
                 if (nMsgLen > 0) {
@@ -1984,29 +1968,18 @@ namespace RevelationsStudios.RevCommProcessor {
         /// <param name="boolProcessCmd">Optional Indicator to Process Message Registered Object Update</param>
         /// <returns>Retrieved Direct Message</returns> 
         public string GetDirectMsgNext(bool boolProcessCmd = false) {
-
+             
             int nMsgLen = ClientCheckDirectMsgsReady();
                                     /* Length of Return Message */
-/*                StringBuilder sbMsg = new StringBuilder(nMsgLen),
-                                    /* Returned Message */
-/*                             sbRetLen = new StringBuilder(MAXBUFFERSIZEDIGITS);
-                                    /* Length for Retrieved Message */
             string strRetMsg = "";  /* Direct Message to Return */
 
             if (nMsgLen > 0) {
-                
-                StringBuilder sbMsg = new StringBuilder(nMsgLen),
-                              sbRetLen = new StringBuilder(MAXBUFFERSIZEDIGITS);
 
-                sbRetLen.Append(nMsgLen.ToString().PadLeft(MAXBUFFERSIZEDIGITS, '0'));
-
-                ClientGetDirectMsgNext(sbMsg, sbRetLen);
-                strRetMsg = sbMsg.ToString();
-                nMsgLen = int.Parse(sbRetLen.ToString());
+                strRetMsg = GetClientReturnValue(ClientGetDirectMsgNext());
 
                 if (boolProcessCmd && nMsgLen > 0 && strRetMsg != "") {
                     
-                    ProcessIncoming(sbMsg.ToString());
+                    ProcessIncoming(strRetMsg);
                 }
 
                 if (nMsgLen > 0) {
@@ -2034,24 +2007,12 @@ namespace RevelationsStudios.RevCommProcessor {
         public string GetHTTPResponse(int nTransID, int nRespID, bool boolProcessCmd = false) {
 
             int nActualMsgLen = ClientCheckHTTPResponse(nTransID, nRespID);
-                                  // Length of Waiting Message
-/*                StringBuilder sbMsg = new StringBuilder(nMsgLen),
-                                    /* Returned Message */
-/*                             sbRetLen = new StringBuilder(MAXBUFFERSIZEDIGITS);
-                                    /* Length for Retrieved Message */
+                                    /* Length of Waiting Message */
             string strRetMsg = "";  /* Direct Message to Return */
               
             if (nActualMsgLen > 0) {
 
-                StringBuilder sbMsg = new StringBuilder(nActualMsgLen),
-                              sbRetLen = new StringBuilder(MAXBUFFERSIZEDIGITS);
-
-                sbRetLen.Append(nActualMsgLen.ToString().PadLeft(MAXBUFFERSIZEDIGITS, '0'));
-
-                ClientGetHTTPResponse(nTransID, nRespID, sbMsg, sbRetLen);
-
-                strRetMsg = sbMsg.ToString();
-                nActualMsgLen = int.Parse(sbRetLen.ToString());
+                strRetMsg = GetClientReturnValue(ClientGetHTTPResponse(nTransID, nRespID));
 
                 if (boolProcessCmd && strRetMsg != "") {
 
@@ -2085,46 +2046,35 @@ namespace RevelationsStudios.RevCommProcessor {
 
             int nActualMsgLen = ClientCheckDataProcessResponse(nTransID, nRespID);
                                     /* Actual Length of Waiting Message */
-            StringBuilder sbMsg = new StringBuilder(nActualMsgLen),
-                                    /* Holder for Message */
-                          sbRetLen = new StringBuilder(nActualMsgLen.ToString());
-                                    /* Length for Retrieved Message */
             string strRetMsg = "";  /* Returned Message */
 
             if (nActualMsgLen > 0) {
 
-                ClientGetDataProcessResponse(nTransID, nRespID, sbMsg, sbRetLen);
+                strRetMsg = GetClientReturnValue(ClientGetDataProcessResponse(nTransID, nRespID));
 
-                nActualMsgLen = int.Parse(sbRetLen.ToString());
+                if (boolProcessCmd) {
 
-                if (nActualMsgLen > 0) {
+                    ProcessIncoming(strRetMsg);
+                }
 
-                    strRetMsg = sbMsg.ToString();
-
-                    if (boolProcessCmd) {
-
-                        ProcessIncoming(sbMsg.ToString());
-                    }
-
-                    if (dictSendFuncs["DATAPROCESS"].ContainsKey(nTransID)) { 
+                if (dictSendFuncs["DATAPROCESS"].ContainsKey(nTransID)) { 
                   
-                        foreach (SendFuncInfo sfiSelect in dictSendFuncs["DATAPROCESS"][nTransID]) {
+                    foreach (SendFuncInfo sfiSelect in dictSendFuncs["DATAPROCESS"][nTransID]) {
 
-                            RunRetFunc(sfiSelect, strRetMsg);
-                        }
+                        RunRetFunc(sfiSelect, strRetMsg);
+                    }
+                }
+
+                if (boolDeleteTrans) {
+
+                    if (dictSendStorage["DATAPROCESS"].ContainsKey(nTransID)) { 
+
+                        dictSendStorage["DATAPROCESS"].Remove(nTransID);
                     }
 
-                    if (boolDeleteTrans) {
+                    if (dictSendFuncs["DATAPROCESS"].ContainsKey(nTransID)) {
 
-                        if (dictSendStorage["DATAPROCESS"].ContainsKey(nTransID)) { 
-
-                            dictSendStorage["DATAPROCESS"].Remove(nTransID);
-                        }
-
-                        if (dictSendFuncs["DATAPROCESS"].ContainsKey(nTransID)) {
-
-                            dictSendFuncs["DATAPROCESS"].Remove(nTransID);
-                        }
+                        dictSendFuncs["DATAPROCESS"].Remove(nTransID);
                     }
                 }
             }
@@ -2136,19 +2086,13 @@ namespace RevelationsStudios.RevCommProcessor {
         ///     Gets Log Errors from Client
         /// </summary>
         public void GetLogError() {
-            
-            StringBuilder sbMsg = new StringBuilder(BUFFERSIZE);
-                                    /* Holder for Message */
-            StringBuilder sbRetLen = new StringBuilder(MAXBUFFERSIZEDIGITS);
-                                    /* Length for Retrieved Message */
 
-            sbRetLen.Append(BUFFERSIZE.ToString().PadLeft(MAXBUFFERSIZEDIGITS, '0'));
-                                
-            ClientGetLogError(sbMsg, sbRetLen);
+            string strRetMsg = GetClientReturnValue(ClientGetLogError());  
+                                        /* Returned Message */
 
-            if (Int64.Parse(sbRetLen.ToString()) > 0 && sbMsg.ToString() != "") {
+            if (strRetMsg != "") {
 
-                Log(sbMsg.ToString(), true);
+                Log(strRetMsg, true);
             }
         }
 
@@ -2157,18 +2101,12 @@ namespace RevelationsStudios.RevCommProcessor {
         /// </summary>
         public void GetDisplayError() {
 
-            StringBuilder sbMsg = new StringBuilder(BUFFERSIZE);
-                                    /* Holder for Message */
-            StringBuilder sbRetLen = new StringBuilder(MAXBUFFERSIZEDIGITS);
-                                    /* Length for Retrieved Message */
+            string strRetMsg = GetClientReturnValue(ClientGetDisplayError());  
+                                        /* Returned Message */
 
-            sbRetLen.Append(BUFFERSIZE.ToString().PadLeft(MAXBUFFERSIZEDIGITS, '0'));
+            if (strRetMsg != "") {
 
-            ClientGetDisplayError(sbMsg, sbRetLen);
-
-            if (Int64.Parse(sbRetLen.ToString()) > 0 && sbMsg.ToString() != "") {
-
-                qstrDisplayErrorMsg.Enqueue(sbMsg.ToString());
+                qstrDisplayErrorMsg.Enqueue(strRetMsg);
             }
         }
 
@@ -2362,6 +2300,7 @@ namespace RevelationsStudios.RevCommProcessor {
                                     /* List of Downloadable File Designation */
               
             sbRetLen.Append(BUFFERSIZE.ToString().PadLeft(MAXBUFFERSIZEDIGITS, '0'));
+
             ClientGetStreamFileList(sbMsg, sbRetLen);
 
             if (sbMsg.ToString().Trim() != "") {
@@ -2407,7 +2346,6 @@ namespace RevelationsStudios.RevCommProcessor {
 
             ctsCloser.Cancel();
             tskCommunicate = null;
-            tskPeerToPeerCommunicate = null;
             tskAsyncDataProcessor = null;
         }
 
@@ -2526,7 +2464,7 @@ namespace RevelationsStudios.RevCommProcessor {
                     DataMap dmRun = dictDataMaps[strDesign];
 
                     object objRawValue = dmRun.miFuncInvoke.Invoke(dmRun.rciObj.objReg,
-                                                                   METHODFIELDMODIFIERTYPES | BindingFlags.OptionalParamBinding,
+                                                                   METHODPERMISSIONTYPES | BindingFlags.OptionalParamBinding,
                                                                    null,
                                                                    aobjParams,
                                                                    CultureInfo.InvariantCulture);
@@ -2754,6 +2692,15 @@ namespace RevelationsStudios.RevCommProcessor {
         }
 
         /// <summary>
+        ///     Set Queue Limit
+        /// </summary>
+        /// <param name="nNewLimit">New Queue Limit</param>
+        public void SetQueueLimit(int nNewLimit) {
+
+            ClientSetQueueLimit(nNewLimit);
+        }
+
+        /// <summary>
         ///     Checks If Transaction ID is Valid
         /// </summary>
         /// <param name="nNewTransID">Transaction ID to Check</param>
@@ -2772,7 +2719,7 @@ namespace RevelationsStudios.RevCommProcessor {
         /// <param name="strLogMsg">Messages to Log</param>
         /// <param name="boolError">Indicator That Message is an Error, Defaults to False</param>
         /// <param name="exSentError">Exception Information</param>
-        public static void Log(string strLogMsg, bool boolError = false, Exception exSentError = null) {
+        public static void Log(string strLogMsg = "", bool boolError = false, Exception exSentError = null) {
 		
 			DateTime dtNow = DateTime.Now;	
 									/* Current Time */
@@ -2781,7 +2728,7 @@ namespace RevelationsStudios.RevCommProcessor {
 				   				 /* Log File Path and File Name */
 			FileStream fsLogFile = null;
 								 /* Access to Log File */
-/*			byte[] abyteLogMsg;	 /* Holder for Log Message Being Put into File */
+			byte[] abyteLogMsg;	 /* Holder for Log Message Being Put into File */
 			
 			try {
 				
@@ -2790,34 +2737,57 @@ namespace RevelationsStudios.RevCommProcessor {
 						
 				    Directory.CreateDirectory(strLogFilePath);
 				}
+                
+                if (strLogMsg != "") {
 
-                if (boolError) {
+                    if (boolError) {
 
-                    strLogMsg = " Error - " + strLogMsg;
-                }
+                        strLogMsg = " Error - " + strLogMsg;
+                    }
 			
-				/* Add Date to Log File Before Showing */
-				strLogMsg = dtNow.ToString("hh:mm:ss.ffff") + ": " + strLogMsg;
+				    /* Add Date to Log File Before Showing */
+				    strLogMsg = dtNow.ToString("hh:mm:ss.ffff") + ": " + strLogMsg;
 
-                if (exSentError != null) {
+                    if (exSentError != null) {
 
-                    strLogMsg += " Exception: " + exSentError.Message + ". Stacktrace: " + exSentError.StackTrace;
-                }
+                        strLogMsg += " Exception: " + exSentError.Message + ". Stacktrace: " + exSentError.StackTrace;
+                    }
 					   				 
-				Console.WriteLine(strLogMsg);
-					
-				/* Append Message to File, If it Doesn't Exist, Create it */
-				strLogFileName += dtNow.ToString("yyyyMMdd") + ".txt";
-	
-				fsLogFile = File.Open(strLogFileName, FileMode.Append);
-
-                lock (fsLogFile) {
-
-                    byte[] abyteLogMsg = new System.Text.UTF8Encoding(true).GetBytes(strLogMsg + "\r\n");
-
-                    fsLogFile.Write(abyteLogMsg, 0, abyteLogMsg.Length);
-                    fsLogFile.Close();
+				    Console.WriteLine(strLogMsg);
                 }
+
+                if (boolLogFileNotLocked) {
+
+                    boolLogFileNotLocked = false;
+					
+				    /* Append Message to File, If it Doesn't Exist, Create it */
+				    strLogFileName += dtNow.ToString("yyyyMMdd") + ".txt";
+	
+				    fsLogFile = File.Open(strLogFileName, FileMode.Append);
+
+                    while (qstrLogFileMsgWaiting.Count > 0) { 
+
+                        abyteLogMsg = new System.Text.UTF8Encoding(true).GetBytes(qstrLogFileMsgWaiting.Dequeue() + "\r\n");
+
+                        fsLogFile.Write(abyteLogMsg, 0, abyteLogMsg.Length);
+                    }
+                
+                    if (strLogMsg != "") {
+
+                        abyteLogMsg = new System.Text.UTF8Encoding(true).GetBytes(strLogMsg + "\r\n");
+
+                        fsLogFile.Write(abyteLogMsg, 0, abyteLogMsg.Length);
+                    }
+
+                    fsLogFile.Close();
+
+                    boolLogFileNotLocked = true;
+                }
+                else if (strLogMsg != "") { 
+                
+                    qstrLogFileMsgWaiting.Enqueue(strLogMsg);
+                }
+
 			}
             catch (Exception exError) {
                                     
@@ -2949,19 +2919,8 @@ namespace RevelationsStudios.RevCommProcessor {
         /// <param name="nMsgIndex">Index for Message to Retrieve from Receiving Queue</param>
         /// <returns>Return Message from Receiving Queue If Found, Else Blank String</returns>
         public string DebugReceived(int nMsgIndex) {
-
-            int nMsgLen = ClientDebugReceivedMsgLength(nMsgIndex);
-                                    /* Length of Return Message */
-            StringBuilder sbMsg = new StringBuilder(nMsgLen); 
-                                    /* Returned Message */
-            StringBuilder sbRetLen = new StringBuilder(MAXBUFFERSIZEDIGITS);
-                                    /* Length for Retrieved Message */
-
-            sbRetLen.Append(nMsgLen.ToString());
-
-            ClientDebugReceived(nMsgIndex, sbMsg, sbRetLen);
               
-            return "(" + sbRetLen.ToString() + ") " + sbMsg.ToString();
+            return "(" + ClientDebugReceivedMsgLength(nMsgIndex) + ") " + GetClientReturnValue(ClientDebugReceived(nMsgIndex));
         }
 
         /// <summary>
@@ -2970,19 +2929,8 @@ namespace RevelationsStudios.RevCommProcessor {
         /// <param name="nMsgIndex">Index for Message to Send from Sending Queue</param>
         /// <returns>Return Message from Sending Queue If Found, Else Blank String</returns>
         public string DebugToSend(int nMsgIndex) {
-
-            int nMsgLen = ClientDebugSendMsgLength(nMsgIndex);
-                                    /* Length of Return Message */
-            StringBuilder sbMsg = new StringBuilder(nMsgLen); 
-                                    /* Returned Message */
-            StringBuilder sbRetLen = new StringBuilder(MAXBUFFERSIZEDIGITS);
-                                    /* Length for Retrieved Message */
-
-            sbRetLen.Append(nMsgLen.ToString());
-
-            ClientDebugToSend(nMsgIndex, sbMsg, sbRetLen);
-
-            return "(" + sbRetLen.ToString() + ") " + sbMsg.ToString();
+                                        
+            return "(" + ClientDebugSendMsgLength(nMsgIndex) + ") " + GetClientReturnValue(ClientDebugToSend(nMsgIndex));
         }
 
         /// <summary>
@@ -2992,18 +2940,7 @@ namespace RevelationsStudios.RevCommProcessor {
         /// <returns>Return Message from Receiving Queue If Found, Else Blank String</returns>
         public string DebugReceivedStored(int nMsgIndex) {
 
-            int nMsgLen = ClientDebugReceivedStoredMsgLength(nMsgIndex);
-                                    /* Length of Return Message */
-            StringBuilder sbMsg = new StringBuilder(nMsgLen); 
-                                    /* Returned Message */
-            StringBuilder sbRetLen = new StringBuilder(MAXBUFFERSIZEDIGITS);
-                                    /* Length for Retrieved Message */
-
-            sbRetLen.Append(nMsgLen.ToString());
-
-            ClientDebugReceivedStored(nMsgIndex, sbMsg, sbRetLen);
-
-            return "(" + sbRetLen.ToString() + ") " + sbMsg.ToString();
+            return "(" + ClientDebugReceivedStoredMsgLength(nMsgIndex) + ") " + GetClientReturnValue(ClientDebugReceivedStored(nMsgIndex));
         }
 
         /// <summary>
@@ -3013,19 +2950,7 @@ namespace RevelationsStudios.RevCommProcessor {
         /// <returns>Return Message from Sending Queue If Found, Else Blank String</returns>
         public string DebugToSendStored(int nMsgIndex) {
 
-            int nMsgLen = ClientDebugSendStoredMsgLength(nMsgIndex);
-                                    /* Length of Return Message */
-            StringBuilder sbMsg = new StringBuilder(nMsgLen); 
-                                    /* Returned Message */
-            StringBuilder sbRetLen = new StringBuilder(MAXBUFFERSIZEDIGITS);
-                                    /* Length for Retrieved Message */
-
-            sbRetLen.Append(nMsgLen.ToString());
-
-            ClientDebugToSendStored(nMsgIndex, sbMsg, sbRetLen);
-
-            return "(" + sbRetLen.ToString() + ") " + sbMsg.ToString();
-
+            return "(" + ClientDebugSendStoredMsgLength(nMsgIndex) + ") " + GetClientReturnValue(ClientDebugToSendStored(nMsgIndex));
         }
 
         public void DebugActivate(bool boolOn = true) {
@@ -3036,6 +2961,26 @@ namespace RevelationsStudios.RevCommProcessor {
         public bool DebugMode() {
 
             return boolDebug;
+        }
+        /// <summary>
+        ///     Convert Client Pointer to Returned Value into String
+        /// </summary>
+        /// <param name="ipClientValue">Pointer to Client Value</param>
+        /// <returns>Client Value as String If Converted, Else Blank String</returns>
+        private string GetClientReturnValue(IntPtr ipClientValue) {
+
+            string strRetMsg = "";
+
+            try {
+    
+                strRetMsg = Marshal.PtrToStringUTF8(ipClientValue);
+            }
+            catch (Exception exError) { 
+            
+                Log("During converting client pointer to returned value into string, an exception occurred.", true, exError);
+            }
+
+            return strRetMsg;
         }
 
         /// <summary>

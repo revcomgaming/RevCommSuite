@@ -33,14 +33,18 @@ EXPORTS
 	AddStreamMsg
 	SendHTTP
 	GetHTTPResponse
+	GetHTTPResponsePointer
 	CheckHTTPResponse
 	RegisterDataProcess
 	RegisterDataProcessWithParams
 	SendDataProcess
 	CheckDataProcessResponse
 	GetDataProcessResponse
+	GetDataProcessResponsePointer
 	GetStreamMsg
+	GetStreamMsgPointer
 	GetStreamMsgNext
+	GetDirectMsgNextPointer
 	CheckStreamMsgReady
 	CheckStreamMsgByIDReady
 	ClearStreamMsgs
@@ -62,7 +66,9 @@ EXPORTS
 	ClearHTTPMsgData
 	Close
 	GetLogError
+	GetLogErrorPointer
 	GetDisplayError
+	GetDisplayErrorPointer
 	SetStreamMsgSeparator
 	SetStreamMsgEnd
 	SetStreamMsgFiller
@@ -83,9 +89,13 @@ EXPORTS
 	IsInSessionGroup
 	IsSessionGroupHost
 	DebugReceived
+	DebugReceivedPointer
 	DebugToSend
+	DebugToSendPointer
 	DebugReceivedStored
+	DebugReceivedStoredPointer
 	DebugToSendStored
+	DebugToSendStoredPointer
 	DebugSendQueueCount
 	DebugReceivedQueueCount
 	DebugSendStoredQueueCount

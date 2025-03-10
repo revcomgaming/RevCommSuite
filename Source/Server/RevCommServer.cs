@@ -2,7 +2,7 @@
 RevCommServer - Communications Hub for RevCommSuite API
  MIT License
 
- Copyright (c) 2023 RevComGaming
+ Copyright (c) 2025 RevComGaming
 
  Permission is hereby granted, free of charge, to any person obtaining a copy
  of this software and associated documentation files (the "Software"), to deal
@@ -23,7 +23,6 @@ RevCommServer - Communications Hub for RevCommSuite API
  SOFTWARE. */
 
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
@@ -58,7 +57,7 @@ namespace RevelationsStudios.RevCommServer {
                                     /* Client Communcations */
         private enum COMMANDS { SENDMSGUSER, SENDFILEUSER, SENDMSG, SENDFILE, REGISTERFILE, PEERTOPEERDISCONNECT,
                                 REGISTERDATAQUERY, REGISTERDATASTATEMENT, REGISTERDATAEVENT, REGISTERDATAMAP, RUNDATAOPERATION,
-                                REMOVEDATAOPERATION, STARTGROUP, JOINGROUP, LEAVEGROUP, CLOSEGROUP };
+                                REMOVEDATAOPERATION, STARTGROUP, JOINGROUP, LEAVEGROUP, CLOSEGROUP, LOG };
 									/* Type of Server Commands */
 
         public static void Main(string[] astrArgs) {
@@ -81,7 +80,7 @@ namespace RevelationsStudios.RevCommServer {
                 tlServer = new TcpListener(IPAddress.Parse(ssConfig.Host), ssConfig.Port);
                 tlServer.Start();
                 
-                Log("RevCommServer - Copyright (c) 2023 RevComGaming");
+                Log("RevCommServer - Copyright (c) 2025 RevComGaming");
                 Log("This program comes with ABSOLUTELY NO WARRANTY");
                 Log("This is free software, and you are welcome to redistribute it under certain conditions.");
                 Log("For more information, go to http://www.gnu.org/licenses/");
@@ -335,6 +334,11 @@ namespace RevelationsStudios.RevCommServer {
                                         cmClientComm.CloseGroup(astrCmdInfo[1]);
 						                break;
 					                }
+                                    case COMMANDS.LOG: {
+                    
+                                        Log(astrCmdInfo[1]);
+                                        break;
+                                    }
                                     default: {
                     
                                         Log("Action: Executing server command. Error: Invalid command. Message: " + strCmdSelect);
@@ -381,8 +385,10 @@ namespace RevelationsStudios.RevCommServer {
 			DateTime dtNow = DateTime.Now;	
 									/* Current Time */
 			string strLogFilePath = "logs/",
-				   strLogFileName = "";
+				   strLogFileName = "",
 				   				 /* Log File Path and File Name */
+                   strExceptDetails = "";
+                                 /* Details from Exception */
 			FileStream fsLogFile = null;
 								 /* Access to Log File */
 /*			byte[] abyteLogMsg;	 /* Holder for Log Message Being Put into File */
@@ -399,7 +405,15 @@ namespace RevelationsStudios.RevCommServer {
 
                 if (exSentError != null) {
 
-                    strLogMsg += " Exception: " + exSentError.Message + ". Stacktrace: " + exSentError.StackTrace;
+                    strExceptDetails = exSentError.InnerException.Message;
+
+                    if (strExceptDetails != "") {
+
+                        strExceptDetails += " Details: " + strExceptDetails + ". ";
+                    }
+
+                    strLogMsg += " Exception: " + exSentError.Message + ". " + strExceptDetails + "Stacktrace: " + 
+                                 exSentError.StackTrace;
                 }
 					   				 
 				Console.WriteLine(strLogMsg);
@@ -458,7 +472,6 @@ namespace RevelationsStudios.RevCommServer {
     ///     Client Communications Object
     /// </summary>
     internal class Communicator {
-
 
         private ServerSettings ssConfig = ServerApp.Settings;
                                     /* Configuration Settings */
@@ -1414,7 +1427,8 @@ namespace RevelationsStudios.RevCommServer {
     	private enum CLIENTOPERATIONS { INVALID, STARTSTREAM, STARTHTTPPOSTASYNC, STARTHTTPPOSTSYNC, STARTHTTPGETASYNC, STARTHTTPGETSYNC, 
                                         DIRECTMSG, ADDSTREAMMSG, SENDHTTP, GETSTREAMFILE, SETHTTPPROCESSPAGE, ADDHTTPMSGDATA, SETSTREAMMSGSEPARATOR,
                                         SETSTREAMMSGSTART, SETSTREAMMSGEND, SETSTREAMMSGFILLER, CLEARHTTPMSGDATA, CLOSE, USESSL, SETSTREAMSSLSERVERNAME,
-                                        PINGRETURN, CLIENTERROR, REGDATAEXEC, PROCESSDATAEXEC, MSGREPLAY, MSGCHECK, UDPSWITCHCONFIRM, GETSTREAMFILELIST };
+                                        PINGRETURN, CLIENTERROR, REGDATAEXEC, PROCESSDATAEXEC, MSGREPLAY, MSGCHECK, UDPSWITCHCONFIRM, PEERTOPEERREGISTER, 
+                                        GETSTREAMFILELIST };
                                     /* Client Operation List */
         //        private enum RESPONSEOPERATIONS { DIRECTMSG, HTTPRESPONSE, STREAMMSG, FILESTART, FILEPART, FILEEND, STREAMFILELIST, 
         //                                          LOGERROR, DISPLAYERROR, PEERTOPEERSTART, PEERTOPEERCONNECT, PEERTOPEERENCRYPT, PEERTOPEERDISCONNECT, PEERTOPEERCHECK, 
@@ -1437,18 +1451,23 @@ namespace RevelationsStudios.RevCommServer {
                                     /* Indicator to Send Incoming from Streams Out to All Other All Streams Except Sender */
                      boolClientPeerToPeer = ssConfig.ClientPeerToPeer;
                                     /* Indicator to Have Clients Setup Peer to Peer Connections with Each Other */
-        private String strIPAddress = "";
-                                    /* IP Address of Client */
+        private string strIPAddress = "";
+                                    /* Remote IP Address of Client */
+        private int nPeerToPeerPort = 0;
+                                    /* Client Assigned Port of "Peer-To-Peer" Connections */
         private Queue<string> qstrMsgReceived = new Queue<string>();
+                                    /* Queue for Receive Messages*/
         private Queue<byte[]> qbyteMsgSend = new Queue<byte[]>(),
-                                    /* Client Receive and Send Message Queue */
+                                    /* Client Send Message Queue */
                               qbyteMsgReplay = new Queue<byte[]>();
                                     /* Message Queue for Replaying Client Requested Messages */
         private Dictionary<long, List<byte[]>> dictltBackups = new Dictionary<long, List<byte[]>>();
                                     /* List of Send Messages for Backup Replays */
+        private Dictionary<long, string> dictstrMsgOutOfOrderStore = new Dictionary<long, string>();
+                                    /* List for Messages When Received Out of Order */
         private Dictionary<int, CommTrans> dcCommTrans = new Dictionary<int, CommTrans>();
                                     /* Holds All Communiction Transaction Objects */
-        private delegate bool delRecStrFuncPtr(String strValue1);
+        private delegate bool delRecStrFuncPtr(string strValue1);
                                     /* Pointer to Receiver Functions That Take a String Value and Returns Boolean */
         private Dictionary<CLIENTOPERATIONS, delRecStrFuncPtr> dcRecFuncs = new Dictionary<CLIENTOPERATIONS, delRecStrFuncPtr>();
                                     /* Holds Pointers to Receiver Functions */
@@ -1479,6 +1498,8 @@ namespace RevelationsStudios.RevCommServer {
         private long lNextMsgToReceive = 1,
                      lLastMsgSent = 0;
                                     /* Next Message Number to be Recieved and Last Message Sent */
+        private DateTime dtMsgReplayTimeout = DateTime.Now;
+                                /* Timeout for Sending Missing Message Out of Check to Client  */
 
         /// <param name="tcSetConnection">Client's Client Connection Information</param>
         /// <param name="nSetClientID">Client ID</param>
@@ -1550,21 +1571,30 @@ namespace RevelationsStudios.RevCommServer {
                 dcRecFuncs.Add(CLIENTOPERATIONS.MSGCHECK, ProcessMsgCheck);
                 dcRecFuncs.Add(CLIENTOPERATIONS.UDPSWITCHCONFIRM, ProcessUDPSwitch);
                 dcRecFuncs.Add(CLIENTOPERATIONS.GETSTREAMFILELIST, GetStreamFileList);
-
+                
                 strIPAddress = ((IPEndPoint)tcConnection.Client.RemoteEndPoint).Address.ToString();
 
                 /* If Clients are Connecting "Peer to Peer" */
                 if (boolClientPeerToPeer) {
 
-                    if (ssConfig.ClientPeerEncryption) {
+                    if (ssConfig.HasClientPeerPortAvailable) {
 
-                        System.Security.Cryptography.RNGCryptoServiceProvider rcspGenerator = new System.Security.Cryptography.RNGCryptoServiceProvider();
-                        rcspGenerator.GetBytes(abyteEncryptKey);
-                        rcspGenerator.GetBytes(abyteEncryptIV);
-                        rcspGenerator.Dispose();
+                        if (ssConfig.ClientPeerEncryption) {
+
+                            System.Security.Cryptography.RNGCryptoServiceProvider rcspGenerator = new System.Security.Cryptography.RNGCryptoServiceProvider();
+                            rcspGenerator.GetBytes(abyteEncryptKey);
+                            rcspGenerator.GetBytes(abyteEncryptIV);
+                            rcspGenerator.Dispose();
+                        }
+
+                        nPeerToPeerPort = ssConfig.AvailableClientPeerToPeerPort;
+
+                        Send(RegisterMsgTracking("PEERTOPEERSTART") + ssConfig.PartEndChars + strIPAddress + ssConfig.PartEndChars + nPeerToPeerPort.ToString(), abyteEncryptKey, abyteEncryptIV);
                     }
+                    else {
 
-                    Send(RegisterMsgTracking("PEERTOPEERSTART") + ssConfig.PartEndChars + strIPAddress + ssConfig.PartEndChars + ssConfig.ClientPeerDefaultPort.ToString(), abyteEncryptKey, abyteEncryptIV);
+                        ServerApp.Log("Action: Initializing holder for client information. Error: All available 'Peer-To-Peer' ports have been assigned.");
+                    }
                 }
 
                 if (ssConfig.UseUDPClients) {
@@ -1890,25 +1920,56 @@ namespace RevelationsStudios.RevCommServer {
 
         /// <summary>Send "Peer To Peer" Connect Message to Client</summary>
         /// <param name="strPeerToPeerServerIP">IP Address of "Peer To Peer" Client</param>
-        /// <param name="abyteEncryptKey">Encryption Key for Client's "Peer To Peer" Communications</param>
-        /// <param name="abyteEncryptIV">Encryption IV Block for Client's "Peer To Peer" Communications</param>
-        private void SendPeerToPeerConnect(string strPeerToPeerServerIP, byte[] abyteEncryptKey = null, byte[] abyteEncryptIV = null) {
+        /// <param name="nClientPeerToPeerPort">Assigned Port of "Peer To Peer" Client</param>
+        /// <param name="abyteEncryptKey">Optional Encryption Key for Client's "Peer To Peer" Communications</param>
+        /// <param name="abyteEncryptIV">Optional Encryption IV Block for Client's "Peer To Peer" Communications</param>
+        private void SendPeerToPeerConnect(string strPeerToPeerServerIP, 
+                                           int nClientPeerToPeerPort, 
+                                           byte[] abyteEncryptKey = null, 
+                                           byte[] abyteEncryptIV = null) {
 
-            if (strPeerToPeerServerIP != strIPAddress) {
+            if (strPeerToPeerServerIP != strIPAddress || ssConfig.AllowMultipleSameIP) {
 
-                Send(RegisterMsgTracking("PEERTOPEERCONNECT") + ssConfig.PartEndChars + strPeerToPeerServerIP + ssConfig.PartEndChars + ssConfig.ClientPeerDefaultPort.ToString(), abyteEncryptKey, abyteEncryptIV);
+                Send(RegisterMsgTracking("PEERTOPEERCONNECT") + 
+                     ssConfig.PartEndChars + 
+                     strPeerToPeerServerIP + 
+                     ssConfig.PartEndChars +
+                     nClientPeerToPeerPort.ToString(),
+                     abyteEncryptKey, 
+                     abyteEncryptIV);
+            }
+            else { 
+            
+                ServerApp.Log("Action: Sending 'Peer-to-Peer' connect message to client. Error: IP Addresses are the same and 'AllowMultipleSameIP' setting is false.");
             }
         }
         
         /// <summary>Set Information to Encrypt "Peer To Peer" Messages to Client</summary>
         /// <param name="strPeerToPeerServerIP">IP Address of "Peer To Peer" Client</param>
+        /// <param name="nClientPeerToPeerPort">Assigned Port of "Peer To Peer" Client</param>
         /// <param name="abyteEncryptKey">Encryption Key for Client's "Peer To Peer" Communications</param>
         /// <param name="abyteEncryptIV">Encryption IV Block for Client's "Peer To Peer" Communications</param>
-        public void SetPeerToPeerEncryption(string strPeerToPeerServerIP, byte[] abyteEncryptKey, byte[] abyteEncryptIV) {
+        public void SetPeerToPeerEncryption(string strPeerToPeerServerIP, 
+                                            int nClientPeerToPeerPort, 
+                                            byte[] abyteEncryptKey, 
+                                            byte[] abyteEncryptIV) {
             
-            if (strPeerToPeerServerIP != strIPAddress && ServerApp.Settings.ClientPeerEncryption) {
+            if (ssConfig.ClientPeerEncryption) {
+
+                if (strPeerToPeerServerIP != strIPAddress || ssConfig.AllowMultipleSameIP) {
                 
-                Send(RegisterMsgTracking("PEERTOPEERENCRYPT") + ssConfig.PartEndChars + strPeerToPeerServerIP, abyteEncryptKey, abyteEncryptIV);
+                    Send(RegisterMsgTracking("PEERTOPEERENCRYPT") + 
+                         ssConfig.PartEndChars + 
+                         strPeerToPeerServerIP +
+                         ssConfig.PartEndChars + 
+                         nClientPeerToPeerPort.ToString(),
+                         abyteEncryptKey, 
+                         abyteEncryptIV);
+                }
+                else { 
+            
+                    ServerApp.Log("Action: Sending 'Peer-to-Peer' encryption message to client. Error: IP Addresses are the same and 'AllowMultipleSameIP' setting is false.");
+                }
             }
         }
 
@@ -1971,24 +2032,14 @@ namespace RevelationsStudios.RevCommServer {
             string strMsgCollect = "",
                    strMsgFound = "";
                                 /* Used for Collecting Message Parts or Sending Message, and Recovered Sent Message */
-            string[] astrMsgParts,
-                     astrMsgMetaData;
-                                /* Parts of Message for Conversion for Direct Message Check and Message Metadata */
-            char[] acharTextValues;
-                                /* Selected Sent Messages Test Values */
-            char charSelectText;/* Selected Character for Sent Messages Test Values */
             int nMsgActualStartIndex = 0;
                                 /* Actual Starting Index of Message */
-            CLIENTOPERATIONS coMsgType;
-                                /* Selected Message's Type */
             AutoResetEvent areThreadStopper = new AutoResetEvent(false);
                                 /* Manage Stopping Thread */
             List<Client> ltcntPingRemove = new List<Client>();
                                 /* List of Clients to Remove from Ping Check */
-            bool boolValidReceived = true;
+            bool boolMsgOutOfOrder = false;
                                 /* Valid Message Received After Metadata Checked */
-            long lMsgNumReceived = 0;
-                                /* Number of Message Received */
             Queue<byte[]> qbyteMsgStoreSend = new Queue<byte[]>();
                                 /* Message Queue for Prepping for Sending */
             IPEndPoint iepUDPClient = null;
@@ -2038,9 +2089,9 @@ namespace RevelationsStudios.RevCommServer {
                         foreach (Client cntSelect in ltPeerToPeerInPingCheck) {
 
                             if (!cntSelect.InPingCheck && cntSelect.Connected) {
-                                
-                                cntSelect.SetPeerToPeerEncryption(strIPAddress, abyteEncryptKey, abyteEncryptIV);
-                                SendPeerToPeerConnect(cntSelect.IP, cntSelect.EncryptKey, cntSelect.EncryptIV);
+
+                                cntSelect.SetPeerToPeerEncryption(strIPAddress, nPeerToPeerPort, abyteEncryptKey, abyteEncryptIV);
+                                SendPeerToPeerConnect(cntSelect.IP, cntSelect.PeerToPeerPort, cntSelect.EncryptKey, cntSelect.EncryptIV);
                                 ltcntPingRemove.Add(cntSelect);
                             }
                             else if (!cntSelect.Connected) {
@@ -2126,7 +2177,7 @@ namespace RevelationsStudios.RevCommServer {
                                                                                 abyteMsgReceived[nWebSockOffset + 4],
                                                                                 abyteMsgReceived[nWebSockOffset + 5] };
 
-                                                abyteWebSockDecoded = Encoding.UTF8.GetBytes(new String('\0', nWebSockMsgLen));
+                                                abyteWebSockDecoded = Encoding.UTF8.GetBytes(new string('\0', nWebSockMsgLen));
                                                 nWebSockOffset += 6;
 
                                                 for (nCounter = 0; nCounter < nWebSockMsgLen; nCounter++) {
@@ -2208,6 +2259,17 @@ namespace RevelationsStudios.RevCommServer {
                         ServerApp.Log("Action: Retrieving and sending user messages. Error: UDP socket closed for reading, switching back to TCP.");
                     }
 
+                    lock (dictstrMsgOutOfOrderStore) { 
+                    
+                        if (dictstrMsgOutOfOrderStore.Count > 0 && dictstrMsgOutOfOrderStore.ContainsKey(lNextMsgToReceive)) {
+
+                            strMsgCollect += strMsgStartChars + dictstrMsgOutOfOrderStore[lNextMsgToReceive] + strMsgEndChars;
+                            dictstrMsgOutOfOrderStore.Remove(lNextMsgToReceive);
+                            boolDataAvail = true;
+                            boolDataRead = true;
+                        }
+                    }
+
                     if (boolDataAvail || boolAfterWebSocketWaitData) { 
 
                         if (boolDataRead || boolAfterWebSocketWaitData) {
@@ -2246,94 +2308,23 @@ namespace RevelationsStudios.RevCommServer {
 
                                             strMsgFound = strMsgCollect.Substring(nMsgActualStartIndex, nMsgEndIndex - nMsgActualStartIndex);
 
-                                            astrMsgParts = strMsgFound.Split(aPartEndChars, ssoNone);
-
-                                            /* Check If Message Metadata for Sequence and Time Sent */
-                                            astrMsgMetaData = astrMsgParts[0].Split(aMsgMetaDataChars, ssoNone);
-
-                                            if (astrMsgMetaData.Length > 1) {
-
-                                                if (astrMsgMetaData.Length >= 2) {
-
-                                                    if (long.TryParse(astrMsgMetaData[1], out lMsgNumReceived)) {
-
-                                                        if (boolValidReceived = (lNextMsgToReceive == lMsgNumReceived)) {
-
-                                                            lNextMsgToReceive++;
-                                                        }
-                                                    }
-                                                }
-
-                                                astrMsgParts[0] = astrMsgMetaData[0];
-                                            }
-
-                                            if (boolValidReceived) { 
-
-                                                lock (ssConfig) {
-
-                                                    /* If Relaying Client Message Elsewhere */
-                                                    ssConfig.TransferClientMsgOut(strMsgFound);
-                                                }
-
-                                                /* If Sending Out to All Other Client Streams */
-                                                if (boolStreamsOutAll && astrMsgParts[0] != "DIRECTMSG") {
-
-                                                    lock (qstrMsgReceived) {
-
-                                                        qstrMsgReceived.Enqueue(strMsgFound);
-                                                    }
-                                                }
-
-                                                /* Process By Running Message Function Command */
-                                                if (Enum.TryParse<CLIENTOPERATIONS>(astrMsgParts[0], true, out coMsgType)) {
-
-                                                    lock (dcRecFuncs) {
-
-                                                        dcRecFuncs[coMsgType].Invoke(strMsgFound);
-                                                    }
-                                                }
-                                            }
-                                            else {
-
-                                                /* Send Message to Client to Resend from Expected Message */
-                                                if (lMsgNumReceived > 0 && lNextMsgToReceive < lMsgNumReceived) {
-
-                                                    SendNoTracking("MSGREPLAY" + strMsgPartEndChars + lNextMsgToReceive.ToString());
-                                                }
-
-                                                boolValidReceived = true;
-                                            }
+                                            boolMsgOutOfOrder = !ProcessMsg(strMsgFound, boolMsgOutOfOrder);
 
                                             strMsgCollect = strMsgCollect.Substring(nMsgEndIndex + strMsgEndChars.Length);
                                             abyteMsgReceived = null;
-                                            lMsgNumReceived = 0;
                                         }
-                                        else {
+                                        else if (nMsgActualStartIndex >= nMsgEndIndex) {
 
-                                            if (nMsgActualStartIndex < nMsgEndIndex) {
+                                            ServerApp.Log("Action: Retrieving and sending user messages. Error: Partial message found, but was removed. Current messages: " + strMsgCollect);
 
-                                                ServerApp.Log("Action: Retrieving and sending user messages. Error: Partial message found, but was removed. Message: " + strMsgCollect);
+                                            if (nMsgEndIndex >= 0) {
+
                                                 strMsgCollect = strMsgCollect.Substring(nMsgStartIndex);
                                             }
+                                            else {
 
-                                            acharTextValues = strMsgCollect.ToCharArray();
-                                            nMsgEndIndex = strMsgCollect.Length - 1;
-
-                                            for (nCounter = nMsgEndIndex; nCounter > nMsgActualStartIndex; nCounter--) { 
-                                
-                                                charSelectText = acharTextValues[nCounter];
-
-                                                if (charSelectText == charMsgFiller || charSelectText == '\0') {
-
-                                                    nMsgEndIndex--;
-                                                }
-                                                else {
-
-                                                    nCounter = nMsgActualStartIndex;
-                                                }
+                                                strMsgCollect = "";
                                             }
-
-                                            strMsgCollect = strMsgCollect.Substring(nMsgActualStartIndex, nMsgEndIndex - nMsgActualStartIndex);
                                         }
 
                                         nMsgStartIndex = strMsgCollect.IndexOf(strMsgStartChars);
@@ -2491,7 +2482,104 @@ namespace RevelationsStudios.RevCommServer {
                 ServerApp.Log("Action: Retrieving and sending user messages.", exError);
                 Close();
             }
-        }	
+        }
+
+        private bool ProcessMsg(string strMsg, bool boolMsgsOutOfOrder = false) { 
+        
+            string[] astrMsgParts = strMsg.Split(aPartEndChars, ssoNone),
+                                        /* Message Split into Parts */
+                     astrMsgMetaData = astrMsgParts[0].Split(aMsgMetaDataChars, ssoNone);
+                                        /* Message Metadata for Sequence and Time Sent */
+            long lMsgNumReceived = 0;   /* Squence Number of the Received Message */
+            bool boolValidReceived = true,
+                 boolMsgIsAhead = false;/* Indicator That a Valid Message was Received or Ahead of Expected */            
+            CLIENTOPERATIONS coMsgType; /* Selected Message's Type */
+            // Queue<string> qstrMsgOutOfOrderToProcess = new Queue<string>();
+                                        /* List for Messages When Received Out of Order to ne Processed */
+
+            if (astrMsgMetaData.Length > 1) {
+
+                if (astrMsgMetaData.Length >= 2) {
+
+                    if (long.TryParse(astrMsgMetaData[1], out lMsgNumReceived)) {
+
+                        if (boolValidReceived = (lNextMsgToReceive == lMsgNumReceived)) {
+
+                            lNextMsgToReceive++;
+                        }
+                        else if (lNextMsgToReceive < lMsgNumReceived) {
+
+                            boolMsgIsAhead = true;
+                        }
+                    }
+                }
+
+                astrMsgParts[0] = astrMsgMetaData[0];
+            }
+
+            if (boolValidReceived) { 
+
+                lock (ssConfig) {
+
+                    /* If Relaying Client Message Elsewhere */
+                    ssConfig.TransferClientMsgOut(strMsg);
+                }
+
+                /* If Sending Out to All Other Client Streams */
+                if (boolStreamsOutAll && astrMsgParts[0] != "DIRECTMSG") {
+
+                    lock (qstrMsgReceived) {
+
+                        qstrMsgReceived.Enqueue(strMsg);
+                    }
+                }
+
+                /* Process By Running Message Function Command */
+                if (Enum.TryParse<CLIENTOPERATIONS>(astrMsgParts[0], true, out coMsgType)) {
+
+                    lock (dcRecFuncs) {
+
+                        dcRecFuncs[coMsgType].Invoke(strMsg);
+                    }
+                }
+
+                if (boolMsgsOutOfOrder) { 
+
+                    Queue<string> qstrMsgOutOfOrderToProcess = new Queue<string>();
+
+                    lock (dictstrMsgOutOfOrderStore) {
+
+                        foreach (string strMsgStored in dictstrMsgOutOfOrderStore.Values) {
+
+                            qstrMsgOutOfOrderToProcess.Enqueue(strMsgStored);
+                        }
+
+                        dictstrMsgOutOfOrderStore.Clear();
+                    }
+
+                    while (qstrMsgOutOfOrderToProcess.Count > 0) {
+
+                        boolValidReceived = ProcessMsg(qstrMsgOutOfOrderToProcess.Dequeue());
+                    }
+                }
+            }
+            else if (boolMsgIsAhead) {
+
+                lock (dictstrMsgOutOfOrderStore) {
+           
+                    dictstrMsgOutOfOrderStore.Add(lMsgNumReceived, strMsg);
+                }
+
+                /* Send Message to Client to Resend from Expected Message */
+                if (lMsgNumReceived > 0 && lNextMsgToReceive < lMsgNumReceived && dtMsgReplayTimeout < DateTime.Now) {
+
+                    SendNoTracking("MSGREPLAY" + strMsgPartEndChars + lNextMsgToReceive.ToString());
+                    dtMsgReplayTimeout = DateTime.Now.AddMilliseconds(ssConfig.MsgReplayTimeout);
+                }
+            }
+
+            return boolValidReceived;
+        }
         
         /// <summary>
         ///     Converts Message for Use in WebSockets Sends
@@ -2519,7 +2607,7 @@ namespace RevelationsStudios.RevCommServer {
                         nOffset = 2;
                     }
 
-                    abyteWebSocketMsg = Encoding.UTF8.GetBytes(new String('\0', nWebSockMsgLen));
+                    abyteWebSocketMsg = Encoding.UTF8.GetBytes(new string('\0', nWebSockMsgLen));
 
                     /* TODO: Check If Using Binnary Type Frame Needed for File Transfers */
                     if (IsMsgAFile(strMsg)) {
@@ -2554,13 +2642,13 @@ namespace RevelationsStudios.RevCommServer {
                 }
                 else {
 
-                    abyteWebSocketMsg = Encoding.UTF8.GetBytes(new String('\0', nMsgLen));
+                    abyteWebSocketMsg = Encoding.UTF8.GetBytes(new string('\0', nMsgLen));
                     ServerApp.Log("Action: Converting sending message to WebSocket message. Error: Message size of " + nMsgLen + " was bigger than allowed max of 65535.");
                 }
             }
             catch (Exception exError) {
 
-                abyteWebSocketMsg = Encoding.UTF8.GetBytes(new String('\0', nMsgLen));
+                abyteWebSocketMsg = Encoding.UTF8.GetBytes(new string('\0', nMsgLen));
                 ServerApp.Log("Action: Converting sending message to WebSocket message", exError);
             }
 
@@ -4030,6 +4118,17 @@ namespace RevelationsStudios.RevCommServer {
             get {
 
                 return strIPAddress;
+            }
+        }
+
+        /// <summary>
+        ///     Gets Client's 'Peer-To-Peer' Assigned Port
+        /// </summary>
+        public int PeerToPeerPort {
+
+            get {
+
+                return nPeerToPeerPort;
             }
         }
 
@@ -5540,27 +5639,33 @@ namespace RevelationsStudios.RevCommServer {
         /// </summary>
         /// <returns>List of Command String</returns>
         public List<string> GetCommands() {
-        
+
+            int nDBConTimeoutInMillis = ssConfig.DBConnectTimeout;
+                                    /* Database Timeout In Milliseconds */
 		    MySqlConnection mscDBAccess = null;
 									/* Database Access for Database Commands */
 			FileStream fsFileAccess = null;
 								 	/* Access to File for Commands */
 			MySqlDataReader msdrRecReader = null;
 									/* Database Record Reader */
+            MySqlCommand mscRunner = null;
+                                    /* Database Runner */
  			StreamReader srReadFile = null;
   									/* Reads Commands from File */
 			List<string> ltstMsgs = new List<string>(),
 									/* List of Commands to be Executed */
                          ltstIDs = new List<string>();
                                     /* List of IDs to Possibly be Deleted */
-            String strMsg = "",     /* Selected Line from File */
+            string strMsg = "",     /* Selected Line from File */
                    strCmdMsgStartChars = ssConfig.CmdMsgStartChars,
                    strCmdMsgEndChars = ssConfig.CmdMsgEndChars;
                                     /* Command Message Start and End Characters */
-            string[] aCmdEndChars = new string[] { strCmdMsgEndChars };
+            string[] astrCmdEndChars = new string[] { strCmdMsgEndChars },
                                     /* Array of Command Message to End Indicator Characters */
-            String[] astrCommandLines; 
+                     astrCommandLines; 
                                     /* Lines of Broken up Command */
+            Stream stmResultBytes;  /* Database Field Results as Stream */
+            Byte[] abyteResult;     /* Database Field Results as Bytes */
             StringSplitOptions ssoRemove = StringSplitOptions.RemoveEmptyEntries;
                                     /* Option for Splitting Strings to Remove Blank Spaces */
  /*           COMMANDINPUTTYPE citTemp;		
@@ -5575,19 +5680,26 @@ namespace RevelationsStudios.RevCommServer {
 						/* If Access to Database Setup, Get Commands, If Deleting Executed Records, Delete Gathered Commands from Database */
 						if ((mscDBAccess = Open()) != null) {     				
 	        				
-	        				msdrRecReader = new MySqlCommand("SELECT " + strDataIDFieldName + ", " + 
-                                                                         strDataValueFieldName + " " +
-                                                             "FROM " + strDataTableName, mscDBAccess).ExecuteReader();
+                            mscRunner = new MySqlCommand("SELECT " + strDataIDFieldName + ", " + 
+                                                                     strDataValueFieldName + " " +
+                                                         "FROM " + strDataTableName, mscDBAccess);
+                            mscRunner.CommandTimeout = nDBConTimeoutInMillis;
+	        				msdrRecReader = mscRunner.ExecuteReader();
 	        				
 	        				while (msdrRecReader.Read()) {
-
-                                strMsg = msdrRecReader.GetString(strDataValueFieldName);
+                                    
+                                stmResultBytes = msdrRecReader.GetStream(strDataValueFieldName);  
+                                abyteResult = new byte[stmResultBytes.Length];     
+                                stmResultBytes.Read(abyteResult, 0, (int)stmResultBytes.Length);
+                                stmResultBytes.Dispose();
+                                stmResultBytes.Close();
+                                strMsg = Encoding.UTF8.GetString(abyteResult);
 
                                 if (strMsg.IndexOf(strCmdMsgStartChars) >= 0 && strMsg.IndexOf(strCmdMsgEndChars) >= 0) {
 
-                                    astrCommandLines = strMsg.Split(aCmdEndChars, ssoRemove);
+                                    astrCommandLines = strMsg.Split(astrCmdEndChars, ssoRemove);
 
-                                    foreach (String strCommandSelect in astrCommandLines) {
+                                    foreach (string strCommandSelect in astrCommandLines) {
 
                                         ltstMsgs.Add(strCommandSelect + strCmdMsgEndChars);
                                     }
@@ -5599,17 +5711,19 @@ namespace RevelationsStudios.RevCommServer {
 
                                 if (boolDelExec) {
 
-                                    ltstIDs.Add(msdrRecReader.GetString(strDataIDFieldName));
+                                    ltstIDs.Add(msdrRecReader.GetInt32(strDataIDFieldName).ToString());
                                 }
 	        				}
-	        				
+                            
 	        				msdrRecReader.Close();
 	        				msdrRecReader = null;
 	        				
 	        				foreach (string strID in ltstIDs) {
-	        					
-	        					new MySqlCommand("DELETE FROM " + strDataTableName + " " +
-                                                 "WHERE " + strDataIDFieldName + " = " + strID, mscDBAccess).ExecuteNonQuery();
+
+                                mscRunner = new MySqlCommand("DELETE FROM " + strDataTableName + " " +
+                                                             "WHERE " + strDataIDFieldName + " = " + strID, mscDBAccess);
+                                mscRunner.CommandTimeout = nDBConTimeoutInMillis;
+                                mscRunner.ExecuteNonQuery();
 	        				}
 	        				
 	        				Close(mscDBAccess);
@@ -5637,9 +5751,9 @@ namespace RevelationsStudios.RevCommServer {
 
                                 if (strMsg.IndexOf(strCmdMsgStartChars) >= 0 && strMsg.IndexOf(strCmdMsgEndChars) >= 0) {
 
-                                    astrCommandLines = strMsg.Split(aCmdEndChars, ssoRemove);
+                                    astrCommandLines = strMsg.Split(astrCmdEndChars, ssoRemove);
 
-                                    foreach (String strCommandSelect in astrCommandLines) {
+                                    foreach (string strCommandSelect in astrCommandLines) {
 
                                         ltstMsgs.Add(strCommandSelect + strCmdMsgEndChars);
                                     }
@@ -5671,13 +5785,15 @@ namespace RevelationsStudios.RevCommServer {
 
                         if (msdrRecReader != null) {
 
-                            ltstIDs.Add(msdrRecReader.GetString(strDataIDFieldName));
+                            ltstIDs.Add(msdrRecReader.GetInt32(strDataIDFieldName).ToString());
                         }
 	        				
 	        		    foreach (string strID in ltstIDs) {
 	        					
-	        			    new MySqlCommand("DELETE FROM " + strDataTableName + " " +
-                                             "WHERE " + strDataIDFieldName + " = " + strID, mscDBAccess).ExecuteNonQuery();
+                            mscRunner = new MySqlCommand("DELETE FROM " + strDataTableName + " " +
+                                                         "WHERE " + strDataIDFieldName + " = " + strID, mscDBAccess);
+                            mscRunner.CommandTimeout = nDBConTimeoutInMillis;
+                            mscRunner.ExecuteNonQuery();
 	        		    }
 	        		}
 
@@ -5716,6 +5832,8 @@ namespace RevelationsStudios.RevCommServer {
     /// </summary>
     internal class DatabaseExecutor : DataOperation {
         
+        public enum MYSQLNUMTYPES { INTEGER, INT, SMALLINT, TINYINT, MEDIUMINT, BIGINT, BIT, DECIMAL, FLOAT, DOUBLE, NUMERIC };
+                       /* MySQL Database Numeric Types Acceptable For Conversion */
         private string strDatabaseOutName = "",
                        /* Database Name */
                        strStatementParamChars = ServerApp.Settings.DBParamChar;
@@ -5743,8 +5861,6 @@ namespace RevelationsStudios.RevCommServer {
                         /* Execution of Multiple Data Processes Thread */
                        thdDMProcess = null;
                         /* Data Map Procesor */
-        private enum MYSQLNUMTYPES { INTEGER, INT, SMALLINT, TINYINT, MEDIUMINT, BIGINT, BIT, DECIMAL, FLOAT, DOUBLE, NUMERIC };
-                       /* MySQL Database Numeric Types Acceptable For Conversion */
        // private enum MYSQLINVTYPES { BINARY, VARBINARY, BLOB, MEDIUMBLOB, LONGBLOB, TINYTEXT, TEXT, MEDIUMTEXT, LONGTEXT, ENUM, BOOL, SET };
         private enum MYSQLINVTYPES { BINARY, VARBINARY };
                         /* MySQL Database Invalid Types For Conversion */
@@ -5784,6 +5900,8 @@ namespace RevelationsStudios.RevCommServer {
                 boolIsVariable = boolSetIsVariable;
                 nIntervalInMillis = nSetIntervalInMillis;
                 mscQuerier = mscSetQuerier;
+
+                mscQuerier.CommandTimeout = ServerApp.Settings.DBConnectTimeout;
             }
             
             public string QueryDataDesign {
@@ -5904,6 +6022,8 @@ namespace RevelationsStudios.RevCommServer {
         /// </summary>
         public void Setup() {
 
+//            ServerSettings ssConfig = ServerApp.Settings;
+
             try {
 
                 if (boolInitialConnect &&
@@ -5911,9 +6031,22 @@ namespace RevelationsStudios.RevCommServer {
                     strMsgFieldName != "" && 
                     strMsgFieldDataType != "") {
 
-                    Run(ServerApp.Settings.GenerateDefaultDataCleanup());
-                    Run(ServerApp.Settings.GenerateDefaultDataProcs(strMsgTableName, strMsgFieldName, strMsgFieldDataType));
-                    boolInitialConnect = false;
+                    ServerSettings ssConfig = ServerApp.Settings;
+
+                    strMsgFieldDataType = strMsgFieldDataType.ToUpper();
+
+                    if (ssConfig.ConfirmMessageDataType(strMsgFieldDataType)) {
+
+                        Run(ssConfig.GenerateDefaultDataCleanup());
+                        Run(ssConfig.GenerateDefaultDataProcs(strMsgTableName, strMsgFieldName, strMsgFieldDataType));
+                        boolInitialConnect = false;
+                    }
+                    else { 
+
+                        ServerApp.Log("Action: Setting up communications for database, '" + strDatabaseOutName + 
+                                      "', for running statements, setting up server commands failed. Error: Invalid message data type sent '" + 
+                                      strMsgFieldDataType + "'.");
+                    }
                 }
             }
             catch (Exception exError)  {
@@ -6038,7 +6171,7 @@ namespace RevelationsStudios.RevCommServer {
             }
             else {
 
-                ServerApp.Log("Action: Registering database event, '" + strDataDesign + "', and failed due to invalid event interval type which include, " + String.Join(", ", Enum.GetNames(typeof(MYSQLEVENTTYPES))) + ".");
+                ServerApp.Log("Action: Registering database event, '" + strDataDesign + "', and failed due to invalid event interval type which include, " + string.Join(", ", Enum.GetNames(typeof(MYSQLEVENTTYPES))) + ".");
             }
         }
 
@@ -6331,6 +6464,7 @@ namespace RevelationsStudios.RevCommServer {
                                     /* Holder for Query Parameters */
                        	
             mscdQuerier = new MySqlCommand(strStatement);
+            mscdQuerier.CommandTimeout = ServerApp.Settings.DBConnectTimeout;
 
             if (dictParamList != null) {
 
@@ -6432,6 +6566,8 @@ namespace RevelationsStudios.RevCommServer {
                                     /* Indicator to Continue Processing */
             Dictionary<int, string> dictstrResponse;
                                     /* New Response Information */
+            Stream stmResultBytes;  /* Database Process Results as Stream */
+            byte[] abyteResult;     /* Database Process Results as Bytes */
 //            MySqlCommand mscdDataProcessReturn; 
                                     /* Query for Data Process Returned Information */
 //            Dictionary<string, object> dictstrParamList;
@@ -6551,8 +6687,9 @@ namespace RevelationsStudios.RevCommServer {
                                 mscdDataProcessReturn = Build("SELECT revcomm_data_result_id, " +
                                                               "       result " +
                                                               "FROM revcomm_data_results " +
-                                                              "WHERE client_id = " + ServerApp.Settings.DBParamChar + ServerApp.Settings.ClientIDVar + " " +
-                                                              "  AND trans_id = " + ServerApp.Settings.DBParamChar + ServerApp.Settings.TransactionIDVar + " " +
+                                                              "WHERE (client_id = " + ServerApp.Settings.DBParamChar + ServerApp.Settings.ClientIDVar + " " +
+                                                              "       AND trans_id = " + ServerApp.Settings.DBParamChar + ServerApp.Settings.TransactionIDVar + ") " +
+                                                              "   OR client_id = 0 " +
                                                               "ORDER BY revcomm_data_result_id ASC", dictstrParamList);
                             }
                             else {
@@ -6573,7 +6710,22 @@ namespace RevelationsStudios.RevCommServer {
 
                                 while (boolAsync ? await msdrRecReader.ReadAsync() : msdrRecReader.Read()) {
 
-                                    sbStorage.Append(msdrRecReader.GetString(1));
+                                    stmResultBytes = msdrRecReader.GetStream(1);
+                                    abyteResult = new byte[stmResultBytes.Length];
+
+                                    if (boolAsync) {
+                                        
+                                        await stmResultBytes.ReadAsync(abyteResult, 0, (int)stmResultBytes.Length);
+                                        await stmResultBytes.DisposeAsync();
+                                    }
+                                    else {
+                                        
+                                        stmResultBytes.Read(abyteResult, 0, (int)stmResultBytes.Length);
+                                        stmResultBytes.Dispose();
+                                    }
+
+                                    sbStorage.Append(Encoding.UTF8.GetString(abyteResult));
+                                    stmResultBytes.Close();
 
                                     ltlDeleteIDs.Add(msdrRecReader.GetInt64(0));
                                 }
@@ -6610,7 +6762,7 @@ namespace RevelationsStudios.RevCommServer {
                                     else {
 
                                         ServerApp.Log("Action: Outputting results from database, '" + strDatabaseOutName + "' and client ID, " + nClientID + 
-                                                        ", transaction ID, '" + nTransID + "' already has a response ID, '" + nRespID + "'.");
+                                                      ", transaction ID, '" + nTransID + "' already has a response ID, '" + nRespID + "'.");
                                     }
                                 }
                                 else {
@@ -6627,12 +6779,13 @@ namespace RevelationsStudios.RevCommServer {
                         if (ltlDeleteIDs.Count > 0) { 
 
                             Run("DELETE FROM revcomm_data_results " +
-                                "WHERE revcomm_data_result_id IN (" + String.Join(",", ltlDeleteIDs.ToArray()) + ")");
+                                "WHERE revcomm_data_result_id IN (" + string.Join(",", ltlDeleteIDs.ToArray()) + ")");
                         }
 
                         if (boolInvalidType) {
 
-                            ServerApp.Log("Action: Outputting results from database, '" + strDatabaseOutName + "' and skipped invalid columns type which include, " + String.Join(", ", Enum.GetNames(typeof(MYSQLINVTYPES))) + ".");
+                            ServerApp.Log("Action: Outputting results from database, '" + strDatabaseOutName + "' and skipped invalid columns type which include, " + 
+                                          string.Join(", ", Enum.GetNames(typeof(MYSQLINVTYPES))) + ".");
                         }
 
                         boolContinue = false;
@@ -6802,7 +6955,8 @@ namespace RevelationsStudios.RevCommServer {
                                             }
                                             else {
 
-                                                ServerApp.Log("Action: Processing data map, desingation: '" + dmSelect.QueryDataDesign + "', and skipped invalid columns type which include: " + String.Join(", ", Enum.GetNames(typeof(MYSQLINVTYPES))) + ".");
+                                                ServerApp.Log("Action: Processing data map, desingation: '" + dmSelect.QueryDataDesign + "', and skipped invalid columns type which include: " + 
+                                                              string.Join(", ", Enum.GetNames(typeof(MYSQLINVTYPES))) + ".");
                                             }
 
                                             nCounter++;
@@ -7068,6 +7222,8 @@ namespace RevelationsStudios.RevCommServer {
         	
             MySqlConnection mscDBAccess = null;
                                     /* Database Access for Database Commands */
+            MySqlCommand mscRunner = null;
+                                    /* Database Runner */
             bool boolMsgSent = false;
 									/* Indicator That Message was Sent */            
                        	
@@ -7075,9 +7231,11 @@ namespace RevelationsStudios.RevCommServer {
 
                 if (boolConnSuccess) {
 
-                    if ((mscDBAccess = Open()) != null) { 
+                    if ((mscDBAccess = Open()) != null) {
 
-                        new MySqlCommand("INSERT INTO " + strDataTableName + " VALUES (" + strDataMsgFieldName + ") = '" + strMsg + "'", mscDBAccess).ExecuteNonQuery();
+                        mscRunner = new MySqlCommand("INSERT INTO " + strDataTableName + " VALUES (" + strDataMsgFieldName + ") = '" + strMsg + "'", mscDBAccess);
+                        mscRunner.CommandTimeout = ServerApp.Settings.DBConnectTimeout;
+                        mscRunner.ExecuteNonQuery();
 
                         Close(mscDBAccess);
                     }
@@ -7213,17 +7371,24 @@ namespace RevelationsStudios.RevCommServer {
         private int nMaxMsgBackups = 1000,
                     nPort = 59234,
                     nUDPPort = 59333,
-                    nClientPeerPortDefault = 59432,
+                    nClientPeerPortRangeStart = 59432,
+                    nClientPeerPortRangeEnd = 59532,
                     nDefaultHTTPPort = 80,
                     nDefaultHTTPSSLPort = 443,
-                    nMaxDBConnectPerObj = 10;  
+                    nMaxDBConnectPerObj = 10,
+                    nBDTimeoutInMillisecs = 300,
+                    nMsgReplayTimeoutInMilliSecs = 100;  
                                     /* Maximum Number of Messages to Hold for Backup Replay, 
                                        Selected Port, 
                                        Default UDP Port, 
-                                       Default Port for Client Peer to Peer Connections and 
+                                       Default Starting and Ending Range for Ports for Client Peer to Peer Connections
                                        Default HTTP Port
                                        Default HTTP SSL Port
-                                       Default Number of Database Connections Specific Objects Can Make */
+                                       Default Number of Database Connections Specific Objects Can Make,
+                                       Default Amount of Time for Database Connections to Return Data,
+                                       Amount of Time to Wait in Requesting Message Replay from Client */
+        private List<int> ltnClientPeerUsedPorts = new List<int>();
+                                    /* List of Used Ports for Client Peer-To-Peer Connections */
 	    private string strLogFilePath = "logs/",
 	        						/* Path to Where Log Files are Saved to */
 					   strFileStorePath = "files/",
@@ -7283,6 +7448,20 @@ namespace RevelationsStudios.RevCommServer {
                        strDefaultMsgIDDataType = "INT",
                        strDefaultMsgValueDataType = "BLOB";
                                     /* Default Names for Server Command Messaging Table, ID Field and Value Field */
+        private Dictionary<string, uint> dictDBTypeMaxSize = new Dictionary<string, uint> {
+            { "CHAR", 255 },
+            { "VARCHAR", 65535 },
+            { "BINARY", 255 },
+            { "VARBINARY", 65535 },
+            { "TINYBLOB", 255 },
+            { "TINYTEXT", 255 },
+            { "TEXT", 65535 },
+            { "BLOB", 65535 },
+            { "MEDIUMTEXT", 16777215 },
+            { "MEDIUMBLOB", 16777215 },
+            { "LONGTEXT", 4294967295 },
+            { "LONGBLOB", 4294967295 }
+        };                          /* Maximum Size for Outputting Data for Server Command Messaging Table */
         private bool boolMsgTableCreate = true;
                                     /* Indicator to Create or Recreate Message Table */
         private List<DatabaseOut> ltdoDBDirectMsgStore = new List<DatabaseOut>();
@@ -7484,6 +7663,14 @@ namespace RevelationsStudios.RevCommServer {
                     }
                 }
 
+                /* Default Timeout for Requesting Message Replay from Client */
+                strSettingValue = GetConfigSetting("//settings/msgs/msgreplaytimeout");
+            
+                if (strSettingValue != "" && int.TryParse(strSettingValue, out nSettingValue)) {
+            
+            	    nMsgReplayTimeoutInMilliSecs = nSettingValue;
+                }
+
                 /* Send All Incoming Client Stream Transmission to All Clients Streams */
                 bool.TryParse(GetConfigSetting("//settings/streams/sendall"), out boolStreamsOutAll);
 
@@ -7500,7 +7687,7 @@ namespace RevelationsStudios.RevCommServer {
                 /* Send All Incoming Direct Message Transmissions Back to the Sending Client */
                 bool.TryParse(GetConfigSetting("//settings/directmsg/sendback"), out boolSendDirectMsgBack);
 
-                /* Default Port for UPD Connections */
+                /* Default Number of Maximum Database Connections */
                 strSettingValue = GetConfigSetting("//settings/database/maxconnectionsperobject");
             
                 if (strSettingValue != "" && int.TryParse(strSettingValue, out nSettingValue)) {
@@ -7508,6 +7695,21 @@ namespace RevelationsStudios.RevCommServer {
             	    nMaxDBConnectPerObj = nSettingValue;
                 }
                 
+                /* Timeout for Database Connection Returns */
+                strSettingValue = GetConfigSetting("//settings/database/connectiontimeout");
+            
+                if (strSettingValue != "" && int.TryParse(strSettingValue, out nSettingValue)) {
+            
+                    if (nSettingValue > 0) {
+
+                	    nBDTimeoutInMillisecs = nSettingValue;
+                    }
+                    else { 
+                    
+                        ServerApp.Log("Action: Getting server settings. Error: Database conenction can not be set to 0, setting to default value of " +  nBDTimeoutInMillisecs + ".");
+                    }
+                }
+
                 /* Have Client Use UDP Communcations with the Server */
                 bool.TryParse(GetConfigSetting("//settings/updclients/enabled"), out boolUseUDPClient);
 
@@ -7530,12 +7732,26 @@ namespace RevelationsStudios.RevCommServer {
                 /* Have Client Directly Connected Peer to Peer to Each Other */
                 bool.TryParse(GetConfigSetting("//settings/peertopeer/enabled"), out boolClientPeerToPeer);
 
-                /* Default Port for Client Peer to Peer Connections */
-                strSettingValue = GetConfigSetting("//settings/peertopeer/port");
+                /* Starting Port Range for Client Peer to Peer Connections */
+                strSettingValue = GetConfigSetting("//settings/peertopeer/port/start");
             
                 if (strSettingValue != "" && int.TryParse(strSettingValue, out nSettingValue)) {
             
-            	    nClientPeerPortDefault = nSettingValue;
+            	    nClientPeerPortRangeStart = nSettingValue;
+                }
+                
+                /* Ending Port Range for Client Peer to Peer Connections */
+                strSettingValue = GetConfigSetting("//settings/peertopeer/port/end");
+            
+                if (strSettingValue != "" && int.TryParse(strSettingValue, out nSettingValue)) {
+            
+            	    nClientPeerPortRangeEnd = nSettingValue;
+                }
+
+                if (nClientPeerPortRangeStart >= nClientPeerPortRangeEnd) {
+
+                    throw new Exception("Action: Getting default settings. Peer-To-Peer port range is invalid. Starting port: " +
+                                        nClientPeerPortRangeStart + " must be less than end port: " + nClientPeerPortRangeEnd);
                 }
 
                 /* Use Encryption with Peer to Peer Connections */
@@ -7910,7 +8126,7 @@ namespace RevelationsStudios.RevCommServer {
                 if (boolUseUDPClient && boolUseSSL) {
 
                     ambOpenSSLDLL = Assembly.LoadFile("libsslMD.dll");
-                    Type typFuncCall = ambOpenSSLDLL.GetType();
+                    System.Type typFuncCall = ambOpenSSLDLL.GetType();
 
                     typFuncCall.GetMethod("SSL_load_error_strings").Invoke(null, new object[] { });
                     typFuncCall.GetMethod("OPENSSL_init_ssl").Invoke(null, new object[] { 0, null });
@@ -8284,6 +8500,18 @@ namespace RevelationsStudios.RevCommServer {
         }
 		
 		/// <summary>
+		/// 	Gets Timeout for Message Replay Request to Client in Milliseconds
+		/// </summary>
+		public int MsgReplayTimeout {
+        
+        	get {
+                  
+				return nMsgReplayTimeoutInMilliSecs;                                  		
+            }
+        }
+		
+		
+		/// <summary>
         /// 	Gets Indicator to Send All Incoming Client Stream Transmission to All Clients Streams
 		/// </summary>
 		public bool StreamsSendAllOut {
@@ -8340,6 +8568,17 @@ namespace RevelationsStudios.RevCommServer {
         }
 
         /// <summary>
+        ///     Gets Maximum Amount of Time Database Connections Have to Return Data
+        /// </summary>
+        public int DBConnectTimeout { 
+        
+            get {
+
+                return nBDTimeoutInMillisecs;
+            }
+        }        
+
+        /// <summary>
         ///     Gets Indicator to Use UDP Communications for Clients
         /// </summary>
         public bool UseUDPClients { 
@@ -8384,13 +8623,56 @@ namespace RevelationsStudios.RevCommServer {
         }
         
 		/// <summary>
-		/// 	Gets Default Access Port for Client Peer to Peer Connections
+		/// 	Has Port Availble for Client Peer to Peer Connections
 		/// </summary>
-        public int ClientPeerDefaultPort {
+        public bool HasClientPeerPortAvailable {
         
         	get {
                   
-				return nClientPeerPortDefault;                                  		
+				return nClientPeerPortRangeEnd - nClientPeerPortRangeStart > ltnClientPeerUsedPorts.Count;                                  		
+            }
+        }
+        
+		/// <summary>
+		/// 	Gets Default Access Port for Client Peer to Peer Connections
+		/// </summary>
+        public int AvailableClientPeerToPeerPort {
+        
+        	get {
+
+                // Random randPortSelector = new Random();
+                int nPeerToPeerPort = 0;
+ //                int nEndPortRange = nClientPeerPortRangeEnd + 1;
+
+                if (HasClientPeerPortAvailable) {
+
+                    Random randPortSelector = new Random();
+                    int nEndPortRange = nClientPeerPortRangeEnd + 1;
+                    nPeerToPeerPort = randPortSelector.Next(nClientPeerPortRangeStart, nEndPortRange);
+
+                    while (ltnClientPeerUsedPorts.Contains(nPeerToPeerPort)) { 
+                
+                        nPeerToPeerPort = randPortSelector.Next(nClientPeerPortRangeStart, nEndPortRange);
+                    }
+                }
+                else {
+
+                    throw new Exception("Action: Getting available Peer-To-Peer port. No ports are available.");
+                }
+
+				return nPeerToPeerPort;                                  		
+            }
+        }
+
+        /// <summary>
+        ///     Remove Port Registered as "Peer-To-Peer" Used Connection
+        /// </summary>
+        /// <param name="nUsedPeerClientPort">Used Port Number</param>
+        public void RemoveUsedClientPeerToPeerPort(int nUsedPeerClientPort) { 
+        
+            if (ltnClientPeerUsedPorts.Contains(nUsedPeerClientPort)) {
+
+                ltnClientPeerUsedPorts.Remove(nUsedPeerClientPort);
             }
         }
         
@@ -8603,6 +8885,18 @@ namespace RevelationsStudios.RevCommServer {
                             try {
 
                                 strMsgIDDataType = xnSelect.SelectSingleNode("iddatatype").InnerText.Trim();
+
+                                try {
+
+                                    Enum.Parse(typeof(DatabaseExecutor.MYSQLNUMTYPES), strMsgIDDataType, true);
+                                }
+                                catch {
+
+                                    strMsgIDDataType = strDefaultMsgIDDataType;
+
+                                    ServerApp.Log("Action: Getting server commands. Error: Setting up to get server commands from database failed, " + 
+                                                  "invalid id field type setting, reverting to default setting.");
+                                }
                             }
                             catch {
 
@@ -8612,6 +8906,15 @@ namespace RevelationsStudios.RevCommServer {
                             try {
 
                                 strMsgValueDataType = xnSelect.SelectSingleNode("valuedatatype").InnerText.Trim();
+
+                                if (!dictDBTypeMaxSize.ContainsKey(strMsgValueDataType)) { 
+                                
+                                    strMsgValueDataType = strDefaultMsgValueDataType;
+
+                                    ServerApp.Log("Action: Getting server commands. Error: Setting up to get server commands from database failed, " + 
+                                                  "invalid data field type setting, reverting to default setting.");
+                                }
+
                             }
                             catch {
 
@@ -8997,7 +9300,7 @@ namespace RevelationsStudios.RevCommServer {
                                     
             try {
                 
-                Type typFuncCall = ambOpenSSLDLL.GetType();
+                System.Type typFuncCall = ambOpenSSLDLL.GetType();
                 objsslConn = typFuncCall.GetMethod("SSL_new").Invoke(null, new object[] { objsctxAccessor });
 
                 if (objsslConn != null) {
@@ -9041,7 +9344,7 @@ namespace RevelationsStudios.RevCommServer {
 
                 if (objsslConn != null) {
 
-                    Type typFuncCall = ambOpenSSLDLL.GetType();
+                    System.Type typFuncCall = ambOpenSSLDLL.GetType();
 
                     if (Int32.Parse(typFuncCall.GetMethod("SSL_shutdown").
                                     Invoke(null, new object[] { objsslConn }).ToString()) > 0) {
@@ -9321,11 +9624,16 @@ namespace RevelationsStudios.RevCommServer {
                                                string strMsgIDDataType,
                                                string strMsgValueDataType) {
 
-            return "DROP TABLE IF EXISTS " + strMsgTableName + " " + DBProcDelimiter + " " + 
-                   "CREATE TABLE IF NOT EXISTS " + strMsgTableName + "(" +
-                   "    " + strMsgIDFieldName + " " + strMsgIDDataType + " UNSIGNED PRIMARY KEY AUTO_INCREMENT, " +
-                   "    " + strMsgValueFieldName + " " + strMsgValueDataType + " NOT NULL " +
-                   ") " + DBProcDelimiter;
+            StringBuilder sbTblSetup = new StringBuilder();
+            /* Holder for Database Setup Script */
+
+            sbTblSetup.Append("DROP TABLE IF EXISTS " + strMsgTableName + " " + DBProcDelimiter + " ");
+            sbTblSetup.Append("CREATE TABLE IF NOT EXISTS " + strMsgTableName + "(");
+            sbTblSetup.Append("    " + strMsgIDFieldName + " " + strMsgIDDataType + " UNSIGNED PRIMARY KEY AUTO_INCREMENT, ");
+            sbTblSetup.Append("    " + strMsgValueFieldName + " " + strMsgValueDataType + " NOT NULL ");
+            sbTblSetup.Append(") " + DBProcDelimiter);
+
+            return sbTblSetup.ToString();
         }
 
         /// <summary>
@@ -9339,552 +9647,618 @@ namespace RevelationsStudios.RevCommServer {
 
             string strDelimiter = DBProcDelimiter;
                                     /* Database Replacement Script Deimiter for Procedures */
+            StringBuilder sbDbSetup = new StringBuilder();
+                                    /* Holder for Database Setup Script */
 
-            return "CREATE TABLE revcomm_msg_groups (" +
-                   "    revcomm_msg_group_id INT(10) UNSIGNED PRIMARY KEY AUTO_INCREMENT, " +
-                   "    owner VARCHAR(25) NOT NULL, " +
-                   "    client_id INT(12) UNSIGNED NULL, " +
-                   "    trans_id INT(10) UNSIGNED NULL, " +
-                   "    resp_id INT(10) UNSIGNED NULL, " +
-                   "    date_started DATETIME DEFAULT CURRENT_TIMESTAMP, " +
-                   "    INDEX ix_revcomm_msg_groups_data_process (client_id, trans_id, resp_id) " +
-                   ") " + strDelimiter + " " + 
-                   "CREATE TABLE revcomm_msgs (" +
-                   "    revcomm_msg_id INT(10) UNSIGNED PRIMARY KEY AUTO_INCREMENT, " +
-                   "    revcomm_msg_group_id INT(10) UNSIGNED NOT NULL, " +
-                   "    designation TEXT NOT NULL, " +
-                   "    open BOOL NOT NULL DEFAULT TRUE, " +
-                   "    CONSTRAINT fk_revcomm_msgs_revcomm_msg_group_id FOREIGN KEY(revcomm_msg_group_id) REFERENCES revcomm_msg_groups (revcomm_msg_group_id) " +
-                   ") " + strDelimiter + " " +
-                   "CREATE TABLE revcomm_msg_varupdates (" +
-                   "    revcomm_msg_varupdate_id INT(10) UNSIGNED PRIMARY KEY AUTO_INCREMENT, " +
-                   "    revcomm_msg_id INT(10) UNSIGNED NOT NULL, " +
-                   "    name TEXT NOT NULL, " +
-                   "    value " + strMsgFieldDataType + " NOT NULL, " +
-                   "    is_not_json BOOL NOT NULL DEFAULT TRUE, " +
-                   "    CONSTRAINT fk_revcomm_msg_varupdates_revcomm_msg_id FOREIGN KEY(revcomm_msg_id) REFERENCES revcomm_msgs (revcomm_msg_id) " +
-                   ") " + strDelimiter + " " +
-                   "CREATE TABLE revcomm_msg_funccalls (" +
-                   "    revcomm_msg_funccall_id INT(10) UNSIGNED PRIMARY KEY AUTO_INCREMENT, " +
-                   "    revcomm_msg_id INT(10) UNSIGNED NOT NULL, " +
-                   "    func_name TEXT NOT NULL, " +
-                   "    CONSTRAINT fk_revcomm_msg_funccalls_revcomm_msg_id FOREIGN KEY(revcomm_msg_id) REFERENCES revcomm_msgs (revcomm_msg_id) " +
-                   ") " + strDelimiter + " " +
-                   "CREATE TABLE revcomm_msg_funccall_params (" +
-                   "    revcomm_msg_funccall_param_id INT(10) UNSIGNED PRIMARY KEY AUTO_INCREMENT, " +
-                   "    revcomm_msg_funccall_id INT(10) UNSIGNED NOT NULL, " +
-                   "    param_value " + strMsgFieldDataType + " NOT NULL, " +
-                   "    param_order SMALLINT UNSIGNED NOT NULL DEFAULT 1, " +
-                   "    is_not_json BOOL NOT NULL DEFAULT TRUE, " +
-                   "    CONSTRAINT fk_revcomm_msg_funccall_params_revcomm_msg_funccall_id FOREIGN KEY(revcomm_msg_funccall_id) REFERENCES revcomm_msg_funccalls (revcomm_msg_funccall_id) " +
-                   ") " + strDelimiter + " " + 
-                   "CREATE TABLE revcomm_data_results (" +
-                   "    revcomm_data_result_id INT(10) UNSIGNED PRIMARY KEY AUTO_INCREMENT, " +
-                   "    client_id INT(12) UNSIGNED NULL, " +
-                   "    trans_id INT(10) UNSIGNED NOT NULL, " +
-                   "    resp_id INT(10) UNSIGNED NOT NULL, " +
-                   "    result " + strMsgFieldDataType + " NOT NULL, " +
-                   "    INDEX ix_revcomm_data_results_data_process (client_id, trans_id) " +
-                   ") " + strDelimiter + " " +
-                   "CREATE PROCEDURE RevComm_JSONMsgGroupCreate(strOwner VARCHAR(25), " +
-                   "                                            OUT nMsgGroupID INT(10)) " +
-                   "BEGIN " +
-                   "   INSERT INTO revcomm_msg_groups (owner) VALUES (strOwner); " +
-                   " " +
-                   "   SET nMsgGroupID = LAST_INSERT_ID(); " +
-                   "END " + strDelimiter + " " +
-                   "CREATE PROCEDURE RevComm_JSONMsgGroupDataResultCreate(strOwner VARCHAR(25), " +
-                   "                                                      nClientID INT(12), " +
-                   "                                                      nTransID INT(10), " +
-                   "                                                      nRespID INT(10), " +
-                   "                                                      OUT nMsgGroupID INT(10)) " +
-                   "BEGIN " +
-                   "   IF nTransID IS NOT NULL AND nRespID IS NOT NULL " +
-                   "   THEN " +
-                   " " +
-                   "      INSERT INTO revcomm_msg_groups (owner, client_id, trans_id, resp_id) VALUES (strOwner, nClientID, nTransID, nRespID); " +
-                   "      SET nMsgGroupID = LAST_INSERT_ID(); " +
-                   " " +
-                   "   END IF; " +
-                   "END " + strDelimiter + " " +
-                   "CREATE PROCEDURE RevComm_JSONMsgCreate(nMsgGroupID INT(10), " +
-                   "                                       strDesignation TEXT, " +
-                   "                                       OUT nMsgID INT(10)) " +
-                   "BEGIN " +
-                   "   INSERT INTO revcomm_msgs (revcomm_msg_group_id, designation) VALUES (nMsgGroupID, strDesignation); " +
-                   " " +
-                   "   SET nMsgID = LAST_INSERT_ID(); " +
-                   "END " + strDelimiter + " " +
-                   "CREATE PROCEDURE RevComm_JSONMsgJSVarUpdate (nSetRevCommMsgID INT(10), " +
-                   "                                             strName TEXT, " +
-                   "                                             strSetValue " + strMsgFieldDataType + ", " +
-                   "                                             boolSetIsNotJSON BOOL) " +
-                   "BEGIN " +
-                   " " +
-                   "   DECLARE nRevCommMsgID INT(10) DEFAULT 0; " +
-                   "   DECLARE strValue " + strMsgFieldDataType + "; " +
-                   "   DECLARE boolIsNotJSON BOOL DEFAULT TRUE; " +
-                   " " +
-                   "   SELECT revcomm_msg_id " +
-                   "   FROM revcomm_msgs " +
-                   "   WHERE revcomm_msg_id = nSetRevCommMsgID " +
-                   "     AND open = TRUE " +
-                   "   INTO nRevCommMsgID; " +
-                   " " +
-                   "   IF nRevCommMsgID > 0 " +
-                   "   THEN " +
-                   " " + 
-                   "      IF strSetValue IS NOT NULL " +
-                   "      THEN " +
-                   "         SET strValue = strSetValue; " +
-                   "      ELSE " +
-                   "         SET strValue = ''; " +
-                   "      END IF; " +
-                   " " +
-                   "      IF boolSetIsNotJSON IS NOT NULL " +
-                   "      THEN " +
-                   "         SET boolIsNotJSON = boolSetIsNotJSON; " +
-                   "      END IF; " +
-                   " " +
-                   "      INSERT INTO revcomm_msg_varupdate (revcomm_msg_id, name, value, is_not_json) " +
-                   "      VALUES (nRevCommMsgID, strName, strValue, boolIsNotJSON); " +
-                   " " +
-                   "   END IF; " +
-                   "END " + strDelimiter + " " +
-                   "CREATE PROCEDURE RevComm_JSONMsgJSFuncCall(nSetRevCommMsgID INT(10), " +
-                   "                                           strFuncName TEXT, " +
-                   "                                           strFirstParamValue " + strMsgFieldDataType + ", " +
-                   "                                           boolSetParamIsNotJSON BOOL, " +
-                   "                                           OUT nRevCommMsgFuncCallID INT(10)) " +
-                   "BEGIN " +
-                   " " +
-                   "   DECLARE nRevCommMsgID INT(10) DEFAULT 0; " +
-                   "   DECLARE boolParamIsNotJSON BOOL DEFAULT TRUE; " +
-                   " " +
-                   "   SELECT revcomm_msg_id " +
-                   "   FROM revcomm_msgs " +
-                   "   WHERE revcomm_msg_id = nSetRevCommMsgID " +
-                   "     AND open = TRUE " +
-                   "   INTO nRevCommMsgID; " +
-                   " " +
-                   "   IF nRevCommMsgID > 0 " +
-                   "   THEN " +
-                   " " +
-                   "      IF boolSetParamIsNotJSON IS NOT NULL " +
-                   "      THEN " +
-                   "         SET boolParamIsNotJSON = boolSetParamIsNotJSON; " +
-                   "      END IF; " +
-                   " " +
-                   "      INSERT INTO revcomm_msg_funccalls (revcomm_msg_id, func_name) " +
-                   "      VALUES (nRevCommMsgID, strFuncName); " +
-                   " " +
-                   "      SET nRevCommMsgFuncCallID = LAST_INSERT_ID(); " +
-                   " " +
-                   "      IF strFirstParamValue IS NOT NULL " +
-                   "      THEN " +
-                   " " +
-                   "         Call RevComm_JSONMsgJSFuncAddParam(nRevCommMsgFuncCallID, strFirstParamValue, 0, boolParamIsNotJSON); " +
-                   "      END IF; " +
-                   " " +
-                   "   END IF; " +
-                   "END " + strDelimiter + " " +
-                   "CREATE PROCEDURE RevComm_JSONMsgJSFuncAddParam(nRevCommMsgFuncCallID INT(10), " +
-                   "                                               strParamSetValue " + strMsgFieldDataType + ", " +
-                   "                                               nParamSetIndex SMALLINT, " +
-                   "                                               boolSetParamIsNotJSON BOOL) " +
-                   "BEGIN " +
-                   " " +
-                   "   DECLARE strParamValue " + strMsgFieldDataType + "; " +
-                   "   DECLARE nParamIndex SMALLINT; " +
-                   "   DECLARE boolParamIsNotJSON BOOL DEFAULT TRUE; " +
-                   " " +
-                   "   IF strParamSetValue IS NOT NULL " +
-                   "   THEN " +
-                   "      SET strParamValue = strParamSetValue; " +
-                   "   ELSE " +
-                   "      SET strParamValue = ''; " +
-                   "   END IF; " +
-                   " " +
-                   "   IF nParamSetIndex IS NOT NULL " +
-                   "   THEN " +
-                   " " +
-                   "      SET nParamIndex = nParamSetIndex; " +
-                   " " +
-                   "   ELSE " +
-                   " " +
-                   "      SELECT MAX(param_order) " +
-                   "      FROM revcomm_msg_funccall_params " +
-                   "      WHERE revcomm_msg_funccall_id = nRevCommMsgFuncCallID " +
-                   "      INTO nParamIndex; " +
-                   " " +
-                   "      IF nParamIndex > 0 " +
-                   "      THEN " +
-                   "         SET nParamIndex = nParamIndex - 1; " +
-                   "      END IF; " +
-                   "   END IF; " +
-                   " " +
-                   "   IF boolSetParamIsNotJSON IS NOT NULL " +
-                   "   THEN " +
-                   "      SET boolParamIsNotJSON = boolSetParamIsNotJSON; " +
-                   "   END IF; " +
-                   " " +
-                   "   UPDATE revcomm_msg_funccall_params " +
-                   "   SET param_order = param_order + 1 " +
-                   "   WHERE revcomm_msg_funccall_id = nRevCommMsgFuncCallID " +
-                   "     AND param_order >= nParamIndex + 1; " +
-                   " " +
-                   "   INSERT INTO revcomm_msg_funccall_params (revcomm_msg_funccall_id, param_value, param_order, is_not_json) " +
-                   "   VALUES (nRevCommMsgFuncCallID, strParamValue, nParamIndex + 1, boolParamIsNotJSON); " +
-                   "END " + strDelimiter + " " +
-                   "CREATE PROCEDURE RevComm_JSONMsgSaveClose(nRevCommMsgID INT(10)) " +
-                   "BEGIN " +
-                   " " +
-                   "   UPDATE revcomm_msgs " +
-                   "   SET open = FALSE " +
-                   "   WHERE revcomm_msg_id = nRevCommMsgID; " +
-                   " " +
-                   "END " + strDelimiter + " " +
-                   "CREATE PROCEDURE RevComm_JSONMsgsOutput(nMsgGroupID INT(10), " +
-                   "                                        OUT strMsg " + strMsgFieldDataType + ") " +
-                   "BEGIN " +
-                   "   DECLARE nRevCommMsgID INT(10) DEFAULT 0; " +
-                   "   DECLARE strDesign TEXT; " +
-                   "   DECLARE strName TEXT; " +
-                   "   DECLARE strValue " + strMsgFieldDataType + "; " +
-                   "   DECLARE boolNotJSON BOOL DEFAULT TRUE; " +
-                   "   DECLARE nRevCommMsgFuncID INT(10) DEFAULT 0; " +
-                   "   DECLARE nClientID INT(12) DEFAULT NULL; " +
-                   "   DECLARE nTransID INT(10) DEFAULT NULL; " +
-                   "   DECLARE nRespID INT(10) DEFAULT NULL; " +
-                   "   DECLARE boolNotCompleted BOOL DEFAULT TRUE; " +
-                   "   DECLARE boolNotFirstMsg BOOL DEFAULT FALSE; " +
-                   "   DECLARE boolNotFirstVar BOOL DEFAULT FALSE; " +
-                   "   DECLARE boolNotFirstFunc BOOL DEFAULT FALSE; " +
-                   "   DECLARE boolNotFirstParam BOOL DEFAULT FALSE; " +
-                   " " +
-                   "   DECLARE curMsgs CURSOR " +
-                   "   FOR SELECT revcomm_msg_id, " +
-                   "              designation " +
-                   "       FROM revcomm_msgs " +
-                   "       WHERE revcomm_msg_group_id = nMsgGroupID " +
-                   "         AND open = FALSE; " +
-                   " " +
-                   "   DECLARE CONTINUE HANDLER FOR NOT FOUND SET boolNotCompleted = FALSE; " +
-                   "   DECLARE EXIT HANDLER FOR SQLEXCEPTION " + 
-                   "   BEGIN " +
-                   "        DECLARE nErrorNum INT; " +
-                   "        DECLARE txErrorMsg TEXT; " +
-                   "   " +
-                   "        GET DIAGNOSTICS CONDITION 1 nErrorNum = MYSQL_ERRNO, txErrorMsg = MESSAGE_TEXT; " +
-                   "        CALL RevComm_JSONMsgError(CONCAT('Action: Outputting JSON message. Exception: ', nErrorNum, ' - ', txErrorMsg)); " +
-                   "   END; " +
-                   " " +
-                   "   SET strMsg = '[';" +
-                   " " +
-                   "   OPEN curMsgs; " +
-                   " " +
-                   "   LOOPMSGS: LOOP " +
-                   " " +
-                   "      FETCH curMsgs INTO nRevCommMsgID, " +
-                   "                         strDesign; " +
-                   " " +
-                   "      IF boolNotCompleted " +
-                   "      THEN " +
-                   " " +
-                   "         IF boolNotFirstMsg " +
-                   "         THEN " +
-                   "            SET strMsg = CONCAT(strMsg, ','); " +
-                   "         END IF; " +
-                   " " +
-                   "         SET strMsg = CONCAT(strMsg, '{\"DESIGNATION\": \"', strDesign, '\", \"VARUPDATES\": ['); " +
-                   "         SET boolNotFirstMsg = TRUE; " +
-                   " " +
-                   "         BEGIN " +
-                   "            DECLARE curMsgVars CURSOR " +
-                   "            FOR SELECT name, " +
-                   "                       value, " +
-                   "                       is_not_json " +
-                   "                FROM revcomm_msg_varupdates " +
-                   "                WHERE revcomm_msg_id = nRevCommMsgID; " +
-                   " " +
-                   "            OPEN curMsgVars; " +
-                   " " +
-                   "            LOOPMSGVARS: LOOP " +
-                   " " +
-                   "                FETCH curMsgVars INTO strName, " +
-                   "                                      strValue, " +
-                   "                                      boolNotJSON; " +
-                   " " +
-                   "                IF boolNotCompleted " +
-                   "                THEN " +
-                   " " +
-                   "                    IF boolNotFirstVar " +
-                   "                    THEN " +
-                   "                        SET strMsg = CONCAT(strMsg, ','); " +
-                   "                    END IF; " +
-                   " " +
-                   "                    IF REPLACE(strValue, '.', '') NOT REGEXP '^-?[0-9]+$' AND boolNotJSON " +
-                   "                    THEN " +
-                   "                        SET strMsg = CONCAT(strMsg, '{\"NAME\": \"', strName, '\", \"VALUE\": \"', strValue, '\"}'); " +
-                   "                    ELSE " +
-                   "                        SET strMsg = CONCAT(strMsg, '{\"NAME\": \"', strName, '\", \"VALUE\": ', strValue, '}'); " +
-                   "                    END IF; " +
-                   "                    SET boolNotFirstVar = TRUE; " +
-                   " " +
-                   "                ELSE " +
-                   "                    SET boolNotCompleted = TRUE; " +
-                   "                    SET boolNotFirstVar = FALSE; " +
-                   "                    LEAVE LOOPMSGVARS; " +
-                   "                END IF; " +
-                   "            END LOOP; " +
-                   " " +
-                   "            CLOSE curMsgVars; " +
-                   "         END; " +
-                   " " +
-                   "         SET strMsg = CONCAT(strMsg, '], \"FUNCCALLS\": ['); " +
-                   " " +
-                   "         BEGIN" +
-                   "            DECLARE curMsgFuncs CURSOR " +
-                   "            FOR SELECT revcomm_msg_funccall_id, " +
-                   "                       func_name " +
-                   "                FROM revcomm_msg_funccalls " +
-                   "                WHERE revcomm_msg_id = nRevCommMsgID; " +
-                   " " +
-                   "            OPEN curMsgFuncs; " +
-                   " " +
-                   "            LOOPMSGFUNCS: LOOP " +
-                   " " +
-                   "                FETCH curMsgFuncs INTO nRevCommMsgFuncID, " +
-                   "                                       strName; " +
-                   " " +
-                   "                IF boolNotCompleted " +
-                   "                THEN " +
-                   " " +
-                   "                    IF boolNotFirstFunc " +
-                   "                    THEN " +
-                   "                        SET strMsg = CONCAT(strMsg, ','); " +
-                   "                    END IF; " +
-                   " " +
-                   "                    SET strMsg = CONCAT(strMsg, '{\"NAME\": \"', strName, '\", \"PARAMS\": ['); " +
-                   "                    SET boolNotFirstFunc = TRUE; " +
-                   " " +
-                   "                    BEGIN" +
-                   "                        DECLARE curMsgParams CURSOR " +
-                   "                        FOR SELECT param_value, " +
-                   "                                   is_not_json " +
-                   "                            FROM revcomm_msg_funccall_params " +
-                   "                            WHERE revcomm_msg_funccall_id = nRevCommMsgFuncID " +
-                   "                            ORDER BY param_order ASC; " +
-                   " " +
-                   "                        OPEN curMsgParams; " +
-                   " " +
-                   "                        LOOPMSGPARAMS: LOOP " +
-                   " " +
-                   "                            FETCH curMsgParams INTO strValue, " +
-                   "                                                    boolNotJSON; " +
-                   " " +
-                   "                            IF boolNotCompleted " +
-                   "                            THEN " +
-                   " " +
-                   "                                IF boolNotFirstParam " +
-                   "                                THEN " +
-                   "                                    SET strMsg = CONCAT(strMsg, ','); " +
-                   "                                END IF; " +
-                   " " +
-                   "                                IF REPLACE(strValue, '.', '') NOT REGEXP '^-?[0-9]+$' AND boolNotJSON " +
-                   "                                THEN " +
-                   "                                    SET strMsg = CONCAT(strMsg, '\"', strValue, '\"'); " +
-                   "                                ELSE " +
-                   "                                    SET strMsg = CONCAT(strMsg, strValue); " +
-                   "                                END IF; " +
-                   " " +
-                   "                                SET boolNotFirstParam = TRUE; " +
-                   "                            ELSE " +
-                   "                                SET boolNotCompleted = TRUE; " +
-                   "                                SET boolNotFirstParam = FALSE; " +
-                   "                                LEAVE LOOPMSGPARAMS; " +
-                   "                            END IF; " +
-                   "                        END LOOP; " +
-                   " " +
-                   "                        CLOSE curMsgParams; " +
-                   "                    END; " +
-                   " " +
-                   "                    SET strMsg = CONCAT(strMsg, ']}'); " +
-                   " " +
-                   "                ELSE " +
-                   "                    SET boolNotCompleted = TRUE; " +
-                   "                    SET boolNotFirstFunc = FALSE; " +
-                   "                    LEAVE LOOPMSGFUNCS; " +
-                   "                END IF; " +
-                   " " +
-                   "            END LOOP; " +
-                   " " +
-                   "            CLOSE curMsgFuncs; " +
-                   "         END;" +
-                   " " +
-                   "         SET strMsg = CONCAT(strMsg, ']}'); " +
-                   " " +
-                   "      ELSE " +
-                   "        LEAVE LOOPMSGS; " +
-                   "      END IF; " +
-                   " " +
-                   "   END LOOP; " +
-                   " " +
-                   "   CLOSE curMsgs; " +
-                   " " +
-                   "   SET strMsg = CONCAT(strMsg, ']'); " +
-                   " " +
-                   "   SELECT client_id, " +
-                   "          trans_id, " +
-                   "          resp_id " +
-                   "   FROM revcomm_msg_groups " +
-                   "   WHERE revcomm_msg_group_id = nMsgGroupID " +
-                   "   INTO nClientID, " +
-                   "        nTransID, " +
-                   "        nRespID; " +
-                   " " +
-                   "   IF nClientID IS NOT NULL AND " +
-                   "      nTransID IS NOT NULL AND " +
-                   "      nRespID IS NOT NULL " +
-                   "   THEN " +
-                   " " +
-                   "      INSERT INTO revcomm_data_results (client_id, trans_id, resp_id, result) " +
-                   "      VALUES (nClientID, nTransID, nRespID, strMsg); " +
-                   " " +
-                   "      SET strMsg = NULL;" +
-                   " " +
-                   "   END IF; " +
-                   " " +
-                   "   Call RevComm_JSONMsgsClear(nMsgGroupID); " + " " +
-                   "END " + strDelimiter +
-                   "CREATE PROCEDURE RevComm_JSONMsgError(strErrorMsg TEXT) " +
-                   "BEGIN " +
-                   "   DECLARE nMsgGroupID INT(10) DEFAULT 0; " +
-                   "   DECLARE nMsgID INT(10) DEFAULT 0; " +
-                   "   DECLARE nRevCommMsgFuncID INT(10) DEFAULT 0; " +
-                   " " + 
-                   "   Call RevComm_JSONMsgGroupCreate('error', nMsgGroupID); " +
-                   "   Call RevComm_JSONMsgCreate(nMsgGroupID, 'ERROR', nMsgID); " +
-                   "   Call RevComm_JSONMsgJSFuncCall(nMsgID, 'Show', strErrorMsg, TRUE, nRevCommMsgFuncID); " +
-                   "   Call RevComm_JSONMsgSaveClose(nMsgID); " +
-                   "END " + strDelimiter + " " +
-                   "CREATE PROCEDURE RevComm_JSONMsgsClear(nMsgGroupID INT(10)) " +
-                   "BEGIN " +
-                   " " +
-                   "   DELETE FROM revcomm_msg_funccall_params " +
-                   "   WHERE revcomm_msg_funccall_id IN (SELECT mfc.revcomm_msg_funccall_id " +
-                   "                                     FROM revcomm_msg_funccalls mfc INNER JOIN revcomm_msgs m ON m.revcomm_msg_group_id = nMsgGroupID " +
-                   "                                                                                             AND m.revcomm_msg_id = mfc.revcomm_msg_id); " + 
-                   " " +
-                   "   DELETE FROM revcomm_msg_funccalls " +
-                   "   WHERE revcomm_msg_id IN (SELECT m.revcomm_msg_id " +
-                   "                            FROM revcomm_msgs m " +
-                   "                            WHERE m.revcomm_msg_group_id = nMsgGroupID); " +
-                   " " +
-                   "   DELETE FROM revcomm_msg_varupdates " +
-                   "   WHERE revcomm_msg_id IN (SELECT m.revcomm_msg_id " +
-                   "                            FROM revcomm_msgs m " +
-                   "                            WHERE m.revcomm_msg_group_id = nMsgGroupID); " +
-                   " " +
-                   "   DELETE FROM revcomm_msgs " +
-                   "   WHERE revcomm_msg_group_id = nMsgGroupID; " +
-                   " " +
-                   "   DELETE FROM revcomm_msg_groups " +
-                   "   WHERE revcomm_msg_group_id = nMsgGroupID; " +
-                   "END " + strDelimiter + " " +
-                   "CREATE PROCEDURE RevComm_SendMsgUser(nClientID INT(12), tMsgInfo " + strMsgFieldDataType + ") " +
-                   "BEGIN " +
-                   "   INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") " +
-                   "   VALUES (CONCAT('" + CmdMsgStartChars + "SENDMSGUSER" + CmdMsgPartEndChars + "', nClientID, '" + CmdMsgPartEndChars + "', tMsgInfo, '" + CmdMsgEndChars + "')); " +
-                   "END " + strDelimiter + " " +
-                   "CREATE PROCEDURE RevComm_SendMsgUserByDesign(nClientID INT(12), tMsgInfo " + strMsgFieldDataType + ", strSetMsgDesign TEXT) " +
-                   "BEGIN " +
-                   "   DECLARE strMsgDesign TEXT DEFAULT ''; " +
-                   " " +
-                   "   IF strSetMsgDesign IS NOT NULL " +
-                   "   THEN" +
-                   " " +
-                   "       SET strMsgDesign = strSetMsgDesign; " +
-                   "   END IF; " +
-                   " " +
-                   "   INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") " +
-                   "   VALUES (CONCAT('" + CmdMsgStartChars + "SENDMSGUSER" + CmdMsgPartEndChars + "', nClientID, '" + CmdMsgPartEndChars + "', tMsgInfo, '" + CmdMsgPartEndChars + "', strMsgDesign, '" + CmdMsgEndChars + "')); " +
-                   "END " + strDelimiter + " " +
-                   "CREATE PROCEDURE RevComm_StartGroup(nClientID INT(12), strGroupID VARCHAR(36)) " +
-                   "BEGIN " +
-                   " " +
-                   "   IF strGroupID IS NULL OR strGroupID = '' " +
-                   "   THEN" +
-                   " " +
-                   "     INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") " +
-                   "     VALUES (CONCAT('" + CmdMsgStartChars + "STARTGROUP" + CmdMsgPartEndChars + "', nClientID, '" + CmdMsgEndChars + "')); " +
-                   "   END IF; " +
-                   "END " + strDelimiter + " " +
-                   "CREATE PROCEDURE RevComm_JoinGroup(nClientID INT(12), strGroupID VARCHAR(36)) " +
-                   "BEGIN " +
-                   " " +
-                   "   IF strGroupID IS NOT NULL AND strGroupID != '' " +
-                   "   THEN" +
-                   " " +
-                   "     INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") " +
-                   "     VALUES (CONCAT('" + CmdMsgStartChars + "JOINGROUP" + CmdMsgPartEndChars + "', nClientID, '" + CmdMsgPartEndChars + "', strGroupID, '" + CmdMsgEndChars + "')); " +
-                   "   END IF; " +
-                   "END " + strDelimiter + " " +
-                   "CREATE PROCEDURE RevComm_LeaveGroup(nClientID INT(12)) " +
-                   "BEGIN " +
-                   " " +
-                   "   INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") " +
-                   "   VALUES (CONCAT('" + CmdMsgStartChars + "LEAVEGROUP" + CmdMsgPartEndChars + "', nClientID, '" + CmdMsgEndChars + "')); " +
-                   "END " + strDelimiter + " " +
-                   "CREATE PROCEDURE RevComm_CloseGroup(strGroupID VARCHAR(36)) " +
-                   "BEGIN " +
-                   " " +
-                   "   INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") " +
-                   "   VALUES (CONCAT('" + CmdMsgStartChars + "CLOSEGROUP" + CmdMsgPartEndChars + "', strGroupID, '" + CmdMsgEndChars + "')); " +
-                   "END " + strDelimiter + " " +
-                   "CREATE PROCEDURE RevComm_RegisterFile(tFileDesign " + strMsgFieldDataType + ", tFilePath " + strMsgFieldDataType + ") " +
-                   "BEGIN " +
-                   "   INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") " +
-                   "   VALUES (CONCAT('" + CmdMsgStartChars + "REGISTERFILE" + CmdMsgPartEndChars + "', tFileDesign, '" + CmdMsgPartEndChars + "', tFilePath, '" + CmdMsgEndChars + "')); " +
-                   "END " + strDelimiter + " " +
-                   "CREATE PROCEDURE RevComm_RegisterDataQuery(tDatabaseDesign " + strMsgFieldDataType + ", " +
-                   "                                           tDataDesign " + strMsgFieldDataType + ", " +
-                   "                                           tDataStatement " + strMsgFieldDataType + ") " +
-                   "BEGIN " +
-                   "   INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") " +
-                   "   VALUES (CONCAT('" + CmdMsgStartChars + "REGISTERDATAQUERY" + CmdMsgPartEndChars + "', tDatabaseDesign, '" + CmdMsgPartEndChars + "', tDataDesign, '" + CmdMsgPartEndChars + "', tDataStatement, '" + CmdMsgEndChars + "')); " +
-                   "END " + strDelimiter + " " +
-                   "CREATE PROCEDURE RevComm_RegisterDataStatement(tDatabaseDesign " + strMsgFieldDataType + ", " +
-                   "                                               tDataDesign " + strMsgFieldDataType + ", " +
-                   "                                               tDataStatement " + strMsgFieldDataType + ") " +
-                   "BEGIN " +
-                   "   INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") " +
-                   "   VALUES (CONCAT('" + CmdMsgStartChars + "REGISTERDATASTATEMENT" + CmdMsgPartEndChars + "', tDatabaseDesign, '" + CmdMsgPartEndChars + "', tDataDesign, '" + CmdMsgPartEndChars + "', tDataStatement, '" + CmdMsgEndChars + "')); " +
-                   "END " + strDelimiter + " " +
-                   "CREATE PROCEDURE RevComm_RegisterDataEvent(tDatabaseDesign " + strMsgFieldDataType + ", " +
-                   "                                           tEventDesign " + strMsgFieldDataType + ", " +
-                   "                                           tDataStatement " + strMsgFieldDataType + ", " +
-                   "                                           nIntervalAmount SMALLINT, " +
-                   "                                           strIntervalType VARCHAR(25), " +
-                   "                                           nDelayInMillisecs SMALLINT) " +
-                   "BEGIN " +
-                   "   INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") " +
-                   "   VALUES (CONCAT('" + CmdMsgStartChars + "REGISTERDATAEVENT" + CmdMsgPartEndChars + "', tDatabaseDesign, '" + CmdMsgPartEndChars + "', tEventDesign, '" + CmdMsgPartEndChars + "', tDataStatement, '" + CmdMsgPartEndChars + "', nIntervalAmount, '" + CmdMsgPartEndChars + "', strIntervalType, '" + CmdMsgPartEndChars + "', nDelayInMillisecs, '" + CmdMsgEndChars + "')); " +
-                   "END " + strDelimiter + " " +
-                   "CREATE PROCEDURE RevComm_RunDataProcess(tDataDesign " + strMsgFieldDataType + ", " +
-                   "                                        tSetParamNameValueList " + strMsgFieldDataType + ") " +
-                   "BEGIN " +
-                   "   DECLARE tParamNameValueList " + strMsgFieldDataType + " DEFAULT ''; " +
-                   " " +
-                   "   IF tSetParamNameValueList IS NOT NULL " +
-                   "   THEN" +
-                   " " +
-                   "       SET tParamNameValueList = tSetParamNameValueList; " +
-                   "   END IF; " +
-                   " " +
-                   "   INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") " +
-                   "   VALUES (CONCAT('" + CmdMsgStartChars + "RUNDATAOPERATION" + CmdMsgPartEndChars + "', tDataDesign, '" + CmdMsgPartEndChars + "true" + CmdMsgPartEndChars + "', REPLACE(tParamNameValueList, ',', '" + CmdMsgPartEndChars + "'), '" + CmdMsgEndChars + "')); " +
-                   "END " + strDelimiter;
+            sbDbSetup.Append("CREATE TABLE revcomm_msg_groups (");
+            sbDbSetup.Append("    revcomm_msg_group_id INT(10) UNSIGNED PRIMARY KEY AUTO_INCREMENT, ");
+            sbDbSetup.Append("    owner VARCHAR(25) NOT NULL, ");
+            sbDbSetup.Append("    client_id INT(12) UNSIGNED NULL, ");
+            sbDbSetup.Append("    trans_id INT(10) UNSIGNED NULL, ");
+            sbDbSetup.Append("    resp_id INT(10) UNSIGNED NULL, ");
+            sbDbSetup.Append("    date_started DATETIME DEFAULT CURRENT_TIMESTAMP, ");
+            sbDbSetup.Append("    UNIQUE uk_revcomm_msg_groups_data_process (client_id, trans_id, resp_id) ");
+            sbDbSetup.Append(") " + strDelimiter + " "); 
+            sbDbSetup.Append("CREATE TABLE revcomm_msgs (");
+            sbDbSetup.Append("    revcomm_msg_id INT(10) UNSIGNED PRIMARY KEY AUTO_INCREMENT, ");
+            sbDbSetup.Append("    revcomm_msg_group_id INT(10) UNSIGNED NOT NULL, ");
+            sbDbSetup.Append("    designation TEXT NOT NULL, ");
+            sbDbSetup.Append("    open BOOL NOT NULL DEFAULT TRUE, ");
+            sbDbSetup.Append("    CONSTRAINT fk_revcomm_msgs_revcomm_msg_group_id FOREIGN KEY(revcomm_msg_group_id) REFERENCES revcomm_msg_groups (revcomm_msg_group_id) ");
+            sbDbSetup.Append(") " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE TABLE revcomm_msg_varupdates (");
+            sbDbSetup.Append("    revcomm_msg_varupdate_id INT(10) UNSIGNED PRIMARY KEY AUTO_INCREMENT, ");
+            sbDbSetup.Append("    revcomm_msg_id INT(10) UNSIGNED NOT NULL, ");
+            sbDbSetup.Append("    name TEXT NOT NULL, ");
+            sbDbSetup.Append("    value " + strMsgFieldDataType + " NOT NULL, ");
+            sbDbSetup.Append("    is_not_json BOOL NOT NULL DEFAULT TRUE, ");
+            sbDbSetup.Append("    CONSTRAINT fk_revcomm_msg_varupdates_revcomm_msg_id FOREIGN KEY(revcomm_msg_id) REFERENCES revcomm_msgs (revcomm_msg_id) ");
+            sbDbSetup.Append(") " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE TABLE revcomm_msg_funccalls (");
+            sbDbSetup.Append("    revcomm_msg_funccall_id INT(10) UNSIGNED PRIMARY KEY AUTO_INCREMENT, ");
+            sbDbSetup.Append("    revcomm_msg_id INT(10) UNSIGNED NOT NULL, ");
+            sbDbSetup.Append("    func_name TEXT NOT NULL, ");
+            sbDbSetup.Append("    CONSTRAINT fk_revcomm_msg_funccalls_revcomm_msg_id FOREIGN KEY(revcomm_msg_id) REFERENCES revcomm_msgs (revcomm_msg_id) ");
+            sbDbSetup.Append(") " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE TABLE revcomm_msg_funccall_params (");
+            sbDbSetup.Append("    revcomm_msg_funccall_param_id INT(10) UNSIGNED PRIMARY KEY AUTO_INCREMENT, ");
+            sbDbSetup.Append("    revcomm_msg_funccall_id INT(10) UNSIGNED NOT NULL, ");
+            sbDbSetup.Append("    param_value " + strMsgFieldDataType + " NOT NULL, ");
+            sbDbSetup.Append("    param_order SMALLINT UNSIGNED NOT NULL DEFAULT 1, ");
+            sbDbSetup.Append("    is_not_json BOOL NOT NULL DEFAULT TRUE, ");
+            sbDbSetup.Append("    CONSTRAINT fk_revcomm_msg_funccall_params_revcomm_msg_funccall_id FOREIGN KEY(revcomm_msg_funccall_id) REFERENCES revcomm_msg_funccalls (revcomm_msg_funccall_id) ");
+            sbDbSetup.Append(") " + strDelimiter + " "); 
+            sbDbSetup.Append("CREATE TABLE revcomm_data_results (");
+            sbDbSetup.Append("    revcomm_data_result_id INT(10) UNSIGNED PRIMARY KEY AUTO_INCREMENT, ");
+            sbDbSetup.Append("    client_id INT(12) UNSIGNED NULL, ");
+            sbDbSetup.Append("    trans_id INT(10) UNSIGNED NOT NULL, ");
+            sbDbSetup.Append("    resp_id INT(10) UNSIGNED NOT NULL, ");
+            sbDbSetup.Append("    result " + strMsgFieldDataType + " NOT NULL, ");
+            sbDbSetup.Append("    UNIQUE uk_revcomm_data_results_data_process (client_id, trans_id, resp_id) ");
+            sbDbSetup.Append(") " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE PROCEDURE RevComm_JSONMsgGroupCreate(strOwner VARCHAR(25), ");
+            sbDbSetup.Append("                                            OUT nMsgGroupID INT(10)) ");
+            sbDbSetup.Append("BEGIN ");            
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   DECLARE nAppTransCount SMALLINT DEFAULT 0; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   SELECT COUNT(*) ");
+            sbDbSetup.Append("   FROM revcomm_msg_groups rmg ");
+            sbDbSetup.Append("   WHERE rmg.client_id = 0 ");
+            sbDbSetup.Append("     AND rmg.trans_id = 0 ");
+            sbDbSetup.Append("   INTO nAppTransCount; ");
+            sbDbSetup.Append(" ");  
+            sbDbSetup.Append("   CALL RevComm_JSONMsgGroupDataResultCreate(strOwner, 0, 0, nAppTransCount, nMsgGroupID); ");
+            sbDbSetup.Append("END " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE PROCEDURE RevComm_JSONMsgGroupDataResultCreate(strOwner VARCHAR(25), ");
+            sbDbSetup.Append("                                                      nClientID INT(12), ");
+            sbDbSetup.Append("                                                      nTransID INT(10), ");
+            sbDbSetup.Append("                                                      nRespID INT(10), ");
+            sbDbSetup.Append("                                                      OUT nMsgGroupID INT(10)) ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append("   DECLARE nTransRespCount SMALLINT DEFAULT 0; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   IF nTransID IS NOT NULL AND nRespID IS NOT NULL ");
+            sbDbSetup.Append("   THEN ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("      SELECT COUNT(*) ");
+            sbDbSetup.Append("      FROM revcomm_msg_groups rmg INNER JOIN revcomm_msgs rm ON rm.revcomm_msg_group_id = rmg.revcomm_msg_group_id ");
+            sbDbSetup.Append("                                                            AND rm.open = FALSE ");
+            sbDbSetup.Append("      WHERE rmg.client_id = nClientID ");
+            sbDbSetup.Append("        AND rmg.trans_id = nTransID ");
+            sbDbSetup.Append("        AND rmg.resp_id = nRespID ");
+            sbDbSetup.Append("      INTO nTransRespCount; ");
+            sbDbSetup.Append(" ");                   
+            sbDbSetup.Append("      IF nTransRespCount <= 0 ");
+            sbDbSetup.Append("      THEN ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("        INSERT INTO revcomm_msg_groups (owner, client_id, trans_id, resp_id) VALUES (strOwner, nClientID, nTransID, nRespID); ");
+            sbDbSetup.Append("        SET nMsgGroupID = LAST_INSERT_ID(); ");
+            sbDbSetup.Append("      ELSE ");
+            sbDbSetup.Append("        SET nMsgGroupID = NULL; ");
+            sbDbSetup.Append("        CALL RevComm_JSONMsgError(CONCAT('Action: Creating message group. Error: A message group already exists for client_id: ', nClientID, ', trans_id: ', nTransID, ', resp_id: ', nRespID)); ");
+            sbDbSetup.Append("      END IF; ");
+            sbDbSetup.Append("   END IF; ");
+            sbDbSetup.Append("END " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE PROCEDURE RevComm_JSONMsgCreate(nMsgGroupID INT(10), ");
+            sbDbSetup.Append("                                       strDesignation TEXT, ");
+            sbDbSetup.Append("                                       OUT nMsgID INT(10)) ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append("   INSERT INTO revcomm_msgs (revcomm_msg_group_id, designation) VALUES (nMsgGroupID, strDesignation); ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   SET nMsgID = LAST_INSERT_ID(); ");
+            sbDbSetup.Append("END " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE PROCEDURE RevComm_JSONMsgJSVarUpdate(nSetRevCommMsgID INT(10), ");
+            sbDbSetup.Append("                                            strName TEXT, ");
+            sbDbSetup.Append("                                            strSetValue " + strMsgFieldDataType + ", ");
+            sbDbSetup.Append("                                            boolSetIsNotJSON BOOL) ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   DECLARE nRevCommMsgID INT(10) DEFAULT 0; ");
+            sbDbSetup.Append("   DECLARE strValue " + strMsgFieldDataType + "; ");
+            sbDbSetup.Append("   DECLARE boolIsNotJSON BOOL DEFAULT TRUE; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   SELECT revcomm_msg_id ");
+            sbDbSetup.Append("   FROM revcomm_msgs ");
+            sbDbSetup.Append("   WHERE revcomm_msg_id = nSetRevCommMsgID ");
+            sbDbSetup.Append("     AND open = TRUE ");
+            sbDbSetup.Append("   INTO nRevCommMsgID; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   IF nRevCommMsgID > 0 ");
+            sbDbSetup.Append("   THEN ");
+            sbDbSetup.Append(" "); 
+            sbDbSetup.Append("      IF strSetValue IS NOT NULL ");
+            sbDbSetup.Append("      THEN ");
+            sbDbSetup.Append("         SET strValue = strSetValue; ");
+            sbDbSetup.Append("      ELSE ");
+            sbDbSetup.Append("         SET strValue = ''; ");
+            sbDbSetup.Append("      END IF; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("      IF boolSetIsNotJSON IS NOT NULL ");
+            sbDbSetup.Append("      THEN ");
+            sbDbSetup.Append("         SET boolIsNotJSON = boolSetIsNotJSON; ");
+            sbDbSetup.Append("      END IF; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("      INSERT INTO revcomm_msg_varupdate (revcomm_msg_id, name, value, is_not_json) ");
+            sbDbSetup.Append("      VALUES (nRevCommMsgID, strName, strValue, boolIsNotJSON); ");
+            sbDbSetup.Append("   ELSE ");
+            sbDbSetup.Append("      CALL RevComm_JSONMsgError(CONCAT('Action: Adding variable update to message. Error: There is no open message for revcomm_msg_id: ', nSetRevCommMsgID)); ");
+            sbDbSetup.Append("   END IF; ");
+            sbDbSetup.Append("END " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE PROCEDURE RevComm_JSONMsgJSFuncCall(nSetRevCommMsgID INT(10), ");
+            sbDbSetup.Append("                                           strFuncName TEXT, ");
+            sbDbSetup.Append("                                           strFirstParamValue " + strMsgFieldDataType + ", ");
+            sbDbSetup.Append("                                           boolSetParamIsNotJSON BOOL, ");
+            sbDbSetup.Append("                                           OUT nRevCommMsgFuncCallID INT(10)) ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   DECLARE nRevCommMsgID INT(10) DEFAULT 0; ");
+            sbDbSetup.Append("   DECLARE boolParamIsNotJSON BOOL DEFAULT TRUE; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   SELECT revcomm_msg_id ");
+            sbDbSetup.Append("   FROM revcomm_msgs ");
+            sbDbSetup.Append("   WHERE revcomm_msg_id = nSetRevCommMsgID ");
+            sbDbSetup.Append("     AND open = TRUE ");
+            sbDbSetup.Append("   INTO nRevCommMsgID; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   IF nRevCommMsgID > 0 ");
+            sbDbSetup.Append("   THEN ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("      IF boolSetParamIsNotJSON IS NOT NULL ");
+            sbDbSetup.Append("      THEN ");
+            sbDbSetup.Append("         SET boolParamIsNotJSON = boolSetParamIsNotJSON; ");
+            sbDbSetup.Append("      END IF; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("      INSERT INTO revcomm_msg_funccalls (revcomm_msg_id, func_name) ");
+            sbDbSetup.Append("      VALUES (nRevCommMsgID, strFuncName); ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("      SET nRevCommMsgFuncCallID = LAST_INSERT_ID(); ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("      IF strFirstParamValue IS NOT NULL ");
+            sbDbSetup.Append("      THEN ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("         Call RevComm_JSONMsgJSFuncAddParam(nRevCommMsgFuncCallID, strFirstParamValue, 0, boolParamIsNotJSON); ");
+            sbDbSetup.Append("      END IF; ");
+            sbDbSetup.Append("   ELSE ");
+            sbDbSetup.Append("      SET nRevCommMsgFuncCallID = NULL; ");
+            sbDbSetup.Append("      CALL RevComm_JSONMsgError(CONCAT('Action: Adding function call to message. Error: There is no open message for revcomm_msg_id: ', nSetRevCommMsgID)); ");
+            sbDbSetup.Append("   END IF; ");
+            sbDbSetup.Append("END " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE PROCEDURE RevComm_JSONMsgJSFuncAddParam(nRevCommMsgFuncCallID INT(10), ");
+            sbDbSetup.Append("                                               strParamSetValue " + strMsgFieldDataType + ", ");
+            sbDbSetup.Append("                                               nParamSetIndex SMALLINT, ");
+            sbDbSetup.Append("                                               boolSetParamIsNotJSON BOOL) ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   DECLARE strParamValue " + strMsgFieldDataType + "; ");
+            sbDbSetup.Append("   DECLARE nParamIndex SMALLINT; ");
+            sbDbSetup.Append("   DECLARE boolParamIsNotJSON BOOL DEFAULT TRUE; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   IF strParamSetValue IS NOT NULL ");
+            sbDbSetup.Append("   THEN ");
+            sbDbSetup.Append("      SET strParamValue = strParamSetValue; ");
+            sbDbSetup.Append("   ELSE ");
+            sbDbSetup.Append("      SET strParamValue = ''; ");
+            sbDbSetup.Append("   END IF; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   IF nParamSetIndex IS NOT NULL ");
+            sbDbSetup.Append("   THEN ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("      SET nParamIndex = nParamSetIndex; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   ELSE ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("      SELECT MAX(param_order) ");
+            sbDbSetup.Append("      FROM revcomm_msg_funccall_params ");
+            sbDbSetup.Append("      WHERE revcomm_msg_funccall_id = nRevCommMsgFuncCallID ");
+            sbDbSetup.Append("      INTO nParamIndex; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("      IF nParamIndex > 0 ");
+            sbDbSetup.Append("      THEN ");
+            sbDbSetup.Append("         SET nParamIndex = nParamIndex - 1; ");
+            sbDbSetup.Append("      END IF; ");
+            sbDbSetup.Append("   END IF; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   IF boolSetParamIsNotJSON IS NOT NULL ");
+            sbDbSetup.Append("   THEN ");
+            sbDbSetup.Append("      SET boolParamIsNotJSON = boolSetParamIsNotJSON; ");
+            sbDbSetup.Append("   END IF; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   UPDATE revcomm_msg_funccall_params ");
+            sbDbSetup.Append("   SET param_order = param_order + 1 ");
+            sbDbSetup.Append("   WHERE revcomm_msg_funccall_id = nRevCommMsgFuncCallID ");
+            sbDbSetup.Append("     AND param_order >= nParamIndex + 1; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   INSERT INTO revcomm_msg_funccall_params (revcomm_msg_funccall_id, param_value, param_order, is_not_json) ");
+            sbDbSetup.Append("   VALUES (nRevCommMsgFuncCallID, strParamValue, nParamIndex + 1, boolParamIsNotJSON); ");
+            sbDbSetup.Append("END " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE PROCEDURE RevComm_JSONMsgSaveClose(nRevCommMsgID INT(10)) ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append(" ");    
+            sbDbSetup.Append("  IF RevComm_JSONMsgSaveCheck(nRevCommMsgID) ");
+            sbDbSetup.Append("  THEN ");                  
+            sbDbSetup.Append(" ");        
+            sbDbSetup.Append("     UPDATE revcomm_msgs ");
+            sbDbSetup.Append("     SET open = FALSE ");
+            sbDbSetup.Append("     WHERE revcomm_msg_id = nRevCommMsgID; ");
+            sbDbSetup.Append(" ");              
+            sbDbSetup.Append("  ELSE ");
+            sbDbSetup.Append("     CALL RevComm_JSONMsgError(CONCAT('Action: Saving and closing a message. Error: Message for revcomm_msg_id: ', nRevCommMsgID, ' is in a group with a closed message waiting for output or invalid.')); ");    
+            sbDbSetup.Append("  END IF; ");    
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("END " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE FUNCTION RevComm_JSONMsgSaveCheck(nRevCommMsgID INT(10)) RETURNS BOOL ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   DECLARE nOpenMsgCount SMALLINT DEFAULT 0; ");
+            sbDbSetup.Append("   DECLARE boolCheckSuccess BOOL DEFAULT FALSE; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   SELECT COUNT(*) ");
+            sbDbSetup.Append("   FROM revcomm_msg_groups rmg INNER JOIN revcomm_msgs rm ON rm.revcomm_msg_group_id = rmg.revcomm_msg_group_id ");
+            sbDbSetup.Append("                                                         AND rm.revcomm_msg_id = nRevCommMsgID ");
+            sbDbSetup.Append("                                                         AND rm.open = FALSE ");
+            sbDbSetup.Append("   INTO nOpenMsgCount; ");
+            sbDbSetup.Append(" ");                   
+            sbDbSetup.Append("   IF nOpenMsgCount <= 0 ");
+            sbDbSetup.Append("   THEN ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("     SET boolCheckSuccess = TRUE; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   END IF; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   RETURN boolCheckSuccess; ");
+            sbDbSetup.Append("END " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE PROCEDURE RevComm_JSONMsgsOutput(nMsgGroupID INT(10), ");
+            sbDbSetup.Append("                                        OUT strMsg " + strMsgFieldDataType + ") ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append("   DECLARE nRevCommMsgID INT(10) DEFAULT 0; ");
+            sbDbSetup.Append("   DECLARE strDesign TEXT; ");
+            sbDbSetup.Append("   DECLARE strName TEXT; ");
+            sbDbSetup.Append("   DECLARE strValue " + strMsgFieldDataType + "; ");
+            sbDbSetup.Append("   DECLARE boolNotJSON BOOL DEFAULT TRUE; ");
+            sbDbSetup.Append("   DECLARE nRevCommMsgFuncID INT(10) DEFAULT 0; ");
+            sbDbSetup.Append("   DECLARE nClientID INT(12) DEFAULT NULL; ");
+            sbDbSetup.Append("   DECLARE nTransID INT(10) DEFAULT NULL; ");
+            sbDbSetup.Append("   DECLARE nRespID INT(10) DEFAULT NULL; ");
+            sbDbSetup.Append("   DECLARE boolNotCompleted BOOL DEFAULT TRUE; ");
+            sbDbSetup.Append("   DECLARE boolNotFirstMsg BOOL DEFAULT FALSE; ");
+            sbDbSetup.Append("   DECLARE boolNotFirstVar BOOL DEFAULT FALSE; ");
+            sbDbSetup.Append("   DECLARE boolNotFirstFunc BOOL DEFAULT FALSE; ");
+            sbDbSetup.Append("   DECLARE boolNotFirstParam BOOL DEFAULT FALSE; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   DECLARE curMsgs CURSOR ");
+            sbDbSetup.Append("   FOR SELECT revcomm_msg_id, ");
+            sbDbSetup.Append("              designation ");
+            sbDbSetup.Append("       FROM revcomm_msgs ");
+            sbDbSetup.Append("       WHERE revcomm_msg_group_id = nMsgGroupID ");
+            sbDbSetup.Append("         AND open = FALSE; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   DECLARE CONTINUE HANDLER FOR NOT FOUND SET boolNotCompleted = FALSE; ");
+            sbDbSetup.Append("   DECLARE EXIT HANDLER FOR SQLEXCEPTION "); 
+            sbDbSetup.Append("   BEGIN ");
+            sbDbSetup.Append("        DECLARE nErrorNum INT; ");
+            sbDbSetup.Append("        DECLARE txErrorMsg TEXT; ");
+            sbDbSetup.Append("   ");
+            sbDbSetup.Append("        GET DIAGNOSTICS CONDITION 1 nErrorNum = MYSQL_ERRNO, txErrorMsg = MESSAGE_TEXT; ");
+            sbDbSetup.Append("        CALL RevComm_JSONMsgError(CONCAT('Action: Outputting JSON message. Exception: ', nErrorNum, ' - ', txErrorMsg)); ");
+            sbDbSetup.Append("   END; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   SET strMsg = '[';");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   OPEN curMsgs; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   LOOPMSGS: LOOP ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("      FETCH curMsgs INTO nRevCommMsgID, ");
+            sbDbSetup.Append("                         strDesign; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("      IF boolNotCompleted ");
+            sbDbSetup.Append("      THEN ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("         IF boolNotFirstMsg ");
+            sbDbSetup.Append("         THEN ");
+            sbDbSetup.Append("            SET strMsg = RevComm_OutputLimitCheck(strMsg, ','); ");
+            sbDbSetup.Append("         END IF; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("         SET strMsg = RevComm_OutputLimitCheck(strMsg, CONCAT('{\"DESIGNATION\": \"', strDesign, '\", \"VARUPDATES\": [')); ");
+            sbDbSetup.Append("         SET boolNotFirstMsg = TRUE; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("         BEGIN ");
+            sbDbSetup.Append("            DECLARE curMsgVars CURSOR ");
+            sbDbSetup.Append("            FOR SELECT name, ");
+            sbDbSetup.Append("                       value, ");
+            sbDbSetup.Append("                       is_not_json ");
+            sbDbSetup.Append("                FROM revcomm_msg_varupdates ");
+            sbDbSetup.Append("                WHERE revcomm_msg_id = nRevCommMsgID; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("            OPEN curMsgVars; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("            LOOPMSGVARS: LOOP ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("                FETCH curMsgVars INTO strName, ");
+            sbDbSetup.Append("                                      strValue, ");
+            sbDbSetup.Append("                                      boolNotJSON; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("                IF boolNotCompleted ");
+            sbDbSetup.Append("                THEN ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("                    IF boolNotFirstVar ");
+            sbDbSetup.Append("                    THEN ");
+            sbDbSetup.Append("                        SET strMsg = RevComm_OutputLimitCheck(strMsg, ','); ");
+            sbDbSetup.Append("                    END IF; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("                    IF REPLACE(strValue, '.', '') NOT REGEXP '^-?[0-9]+$' AND boolNotJSON ");
+            sbDbSetup.Append("                    THEN ");
+            sbDbSetup.Append("                        SET strMsg = RevComm_OutputLimitCheck(strMsg, CONCAT('{\"NAME\": \"', strName, '\", \"VALUE\": \"', strValue, '\"}')); ");
+            sbDbSetup.Append("                    ELSE ");
+            sbDbSetup.Append("                        SET strMsg = RevComm_OutputLimitCheck(strMsg, CONCAT('{\"NAME\": \"', strName, '\", \"VALUE\": ', strValue, '}')); ");
+            sbDbSetup.Append("                    END IF; ");
+            sbDbSetup.Append("                    SET boolNotFirstVar = TRUE; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("                ELSE ");
+            sbDbSetup.Append("                    SET boolNotCompleted = TRUE; ");
+            sbDbSetup.Append("                    SET boolNotFirstVar = FALSE; ");
+            sbDbSetup.Append("                    LEAVE LOOPMSGVARS; ");
+            sbDbSetup.Append("                END IF; ");
+            sbDbSetup.Append("            END LOOP; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("            CLOSE curMsgVars; ");
+            sbDbSetup.Append("         END; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("         SET strMsg = RevComm_OutputLimitCheck(strMsg, CONCAT('], \"FUNCCALLS\": [')); ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("         BEGIN");
+            sbDbSetup.Append("            DECLARE curMsgFuncs CURSOR ");
+            sbDbSetup.Append("            FOR SELECT revcomm_msg_funccall_id, ");
+            sbDbSetup.Append("                       func_name ");
+            sbDbSetup.Append("                FROM revcomm_msg_funccalls ");
+            sbDbSetup.Append("                WHERE revcomm_msg_id = nRevCommMsgID; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("            OPEN curMsgFuncs; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("            LOOPMSGFUNCS: LOOP ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("                FETCH curMsgFuncs INTO nRevCommMsgFuncID, ");
+            sbDbSetup.Append("                                       strName; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("                IF boolNotCompleted ");
+            sbDbSetup.Append("                THEN ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("                    IF boolNotFirstFunc ");
+            sbDbSetup.Append("                    THEN ");
+            sbDbSetup.Append("                        SET strMsg = RevComm_OutputLimitCheck(strMsg, ','); ");
+            sbDbSetup.Append("                    END IF; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("                    SET strMsg = RevComm_OutputLimitCheck(strMsg, CONCAT('{\"NAME\": \"', strName, '\", \"PARAMS\": [')); ");
+            sbDbSetup.Append("                    SET boolNotFirstFunc = TRUE; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("                    BEGIN");
+            sbDbSetup.Append("                        DECLARE curMsgParams CURSOR ");
+            sbDbSetup.Append("                        FOR SELECT param_value, ");
+            sbDbSetup.Append("                                   is_not_json ");
+            sbDbSetup.Append("                            FROM revcomm_msg_funccall_params ");
+            sbDbSetup.Append("                            WHERE revcomm_msg_funccall_id = nRevCommMsgFuncID ");
+            sbDbSetup.Append("                            ORDER BY param_order ASC; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("                        OPEN curMsgParams; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("                        LOOPMSGPARAMS: LOOP ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("                            FETCH curMsgParams INTO strValue, ");
+            sbDbSetup.Append("                                                    boolNotJSON; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("                            IF boolNotCompleted ");
+            sbDbSetup.Append("                            THEN ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("                                IF boolNotFirstParam ");
+            sbDbSetup.Append("                                THEN ");
+            sbDbSetup.Append("                                    SET strMsg = RevComm_OutputLimitCheck(strMsg, ','); ");
+            sbDbSetup.Append("                                END IF; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("                                IF REPLACE(strValue, '.', '') NOT REGEXP '^-?[0-9]+$' AND boolNotJSON ");
+            sbDbSetup.Append("                                THEN ");
+            sbDbSetup.Append("                                    SET strMsg = RevComm_OutputLimitCheck(strMsg, CONCAT('\"', strValue, '\"')); ");
+            sbDbSetup.Append("                                ELSE ");
+            sbDbSetup.Append("                                    SET strMsg = RevComm_OutputLimitCheck(strMsg, strValue); ");
+            sbDbSetup.Append("                                END IF; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("                                SET boolNotFirstParam = TRUE; ");
+            sbDbSetup.Append("                            ELSE ");
+            sbDbSetup.Append("                                SET boolNotCompleted = TRUE; ");
+            sbDbSetup.Append("                                SET boolNotFirstParam = FALSE; ");
+            sbDbSetup.Append("                                LEAVE LOOPMSGPARAMS; ");
+            sbDbSetup.Append("                            END IF; ");
+            sbDbSetup.Append("                        END LOOP; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("                        CLOSE curMsgParams; ");
+            sbDbSetup.Append("                    END; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("                    SET strMsg = RevComm_OutputLimitCheck(strMsg, ']}'); ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("                ELSE ");
+            sbDbSetup.Append("                    SET boolNotCompleted = TRUE; ");
+            sbDbSetup.Append("                    SET boolNotFirstFunc = FALSE; ");
+            sbDbSetup.Append("                    LEAVE LOOPMSGFUNCS; ");
+            sbDbSetup.Append("                END IF; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("            END LOOP; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("            CLOSE curMsgFuncs; ");
+            sbDbSetup.Append("         END;");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("         SET strMsg = RevComm_OutputLimitCheck(strMsg, ']}'); ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("      ELSE ");
+            sbDbSetup.Append("        LEAVE LOOPMSGS; ");
+            sbDbSetup.Append("      END IF; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   END LOOP; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   CLOSE curMsgs; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   SET strMsg = RevComm_OutputLimitCheck(strMsg, ']'); ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   SELECT client_id, ");
+            sbDbSetup.Append("          trans_id, ");
+            sbDbSetup.Append("          resp_id ");
+            sbDbSetup.Append("   FROM revcomm_msg_groups ");
+            sbDbSetup.Append("   WHERE revcomm_msg_group_id = nMsgGroupID ");
+            sbDbSetup.Append("   INTO nClientID, ");
+            sbDbSetup.Append("        nTransID, ");
+            sbDbSetup.Append("        nRespID; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   IF nClientID IS NOT NULL AND ");
+            sbDbSetup.Append("      nTransID IS NOT NULL AND ");
+            sbDbSetup.Append("      nRespID IS NOT NULL ");
+            sbDbSetup.Append("   THEN ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("      INSERT INTO revcomm_data_results (client_id, trans_id, resp_id, result) ");
+            sbDbSetup.Append("      VALUES (nClientID, nTransID, nRespID, strMsg); ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   END IF; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   Call RevComm_JSONMsgsClear(nMsgGroupID); ");
+            sbDbSetup.Append("END " + strDelimiter);
+            sbDbSetup.Append("CREATE PROCEDURE RevComm_JSONMsgError(strErrorMsg TEXT) ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append("   INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") ");
+            sbDbSetup.Append("   VALUES (CONCAT('" + CmdMsgStartChars + "LOG" + CmdMsgPartEndChars + "', strErrorMsg, '" + CmdMsgEndChars + "')); ");
+            sbDbSetup.Append("END " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE PROCEDURE RevComm_JSONMsgsClear(nMsgGroupID INT(10)) ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   DELETE FROM revcomm_msg_funccall_params ");
+            sbDbSetup.Append("   WHERE revcomm_msg_funccall_id IN (SELECT mfc.revcomm_msg_funccall_id ");
+            sbDbSetup.Append("                                     FROM revcomm_msg_funccalls mfc INNER JOIN revcomm_msgs m ON m.revcomm_msg_group_id = nMsgGroupID ");
+            sbDbSetup.Append("                                                                                             AND m.revcomm_msg_id = mfc.revcomm_msg_id); "); 
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   DELETE FROM revcomm_msg_funccalls ");
+            sbDbSetup.Append("   WHERE revcomm_msg_id IN (SELECT m.revcomm_msg_id ");
+            sbDbSetup.Append("                            FROM revcomm_msgs m ");
+            sbDbSetup.Append("                            WHERE m.revcomm_msg_group_id = nMsgGroupID); ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   DELETE FROM revcomm_msg_varupdates ");
+            sbDbSetup.Append("   WHERE revcomm_msg_id IN (SELECT m.revcomm_msg_id ");
+            sbDbSetup.Append("                            FROM revcomm_msgs m ");
+            sbDbSetup.Append("                            WHERE m.revcomm_msg_group_id = nMsgGroupID); ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   DELETE FROM revcomm_msgs ");
+            sbDbSetup.Append("   WHERE revcomm_msg_group_id = nMsgGroupID; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   DELETE FROM revcomm_msg_groups ");
+            sbDbSetup.Append("   WHERE revcomm_msg_group_id = nMsgGroupID; ");
+            sbDbSetup.Append("END " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE FUNCTION RevComm_OutputLimitCheck(strMsg " + strMsgFieldDataType + ", strAdded " + strMsgFieldDataType + ") RETURNS " + strMsgFieldDataType + " ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append("   DECLARE strResult " + strMsgFieldDataType + " DEFAULT strMsg; ");
+            sbDbSetup.Append("   IF strMsg IS NOT NULL AND strAdded IS NOT NULL" );
+            sbDbSetup.Append("   THEN");
+            sbDbSetup.Append("      IF LENGTH(strMsg) + LENGTH(strAdded) < " + dictDBTypeMaxSize[strMsgFieldDataType] + " ");
+            sbDbSetup.Append("      THEN");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("          SET strResult = CONCAT(strResult, strAdded); ");
+            sbDbSetup.Append("      ELSE ");
+            sbDbSetup.Append("        CALL RevComm_JSONMsgError('Action: Concatenating output string. Error: Values sizes hit max " + strMsgFieldDataType + " datatype size.'); ");
+            sbDbSetup.Append("      END IF; ");
+            sbDbSetup.Append("   END IF; ");
+            sbDbSetup.Append("   RETURN strResult; ");
+            sbDbSetup.Append("END " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE PROCEDURE RevComm_SendMsgUser(nClientID INT(12), tMsgInfo " + strMsgFieldDataType + ") ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append("   INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") ");
+            sbDbSetup.Append("   VALUES (CONCAT('" + CmdMsgStartChars + "SENDMSGUSER" + CmdMsgPartEndChars + "', nClientID, '" + CmdMsgPartEndChars + "', tMsgInfo, '" + CmdMsgEndChars + "')); ");
+            sbDbSetup.Append("END " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE PROCEDURE RevComm_SendMsgUserByDesign(nClientID INT(12), tMsgInfo " + strMsgFieldDataType + ", strSetMsgDesign TEXT) ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append("   DECLARE strMsgDesign TEXT DEFAULT ''; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   IF strSetMsgDesign IS NOT NULL ");
+            sbDbSetup.Append("   THEN");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("       SET strMsgDesign = strSetMsgDesign; ");
+            sbDbSetup.Append("   END IF; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") ");
+            sbDbSetup.Append("   VALUES (CONCAT('" + CmdMsgStartChars + "SENDMSGUSER" + CmdMsgPartEndChars + "', nClientID, '" + CmdMsgPartEndChars + "', tMsgInfo, '" + CmdMsgPartEndChars + "', strMsgDesign, '" + CmdMsgEndChars + "')); ");
+            sbDbSetup.Append("END " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE PROCEDURE RevComm_StartGroup(nClientID INT(12), strGroupID VARCHAR(36)) ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   IF strGroupID IS NULL OR strGroupID = '' ");
+            sbDbSetup.Append("   THEN");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("     INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") ");
+            sbDbSetup.Append("     VALUES (CONCAT('" + CmdMsgStartChars + "STARTGROUP" + CmdMsgPartEndChars + "', nClientID, '" + CmdMsgEndChars + "')); ");
+            sbDbSetup.Append("   END IF; ");
+            sbDbSetup.Append("END " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE PROCEDURE RevComm_JoinGroup(nClientID INT(12), strGroupID VARCHAR(36)) ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   IF strGroupID IS NOT NULL AND strGroupID != '' ");
+            sbDbSetup.Append("   THEN");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("     INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") ");
+            sbDbSetup.Append("     VALUES (CONCAT('" + CmdMsgStartChars + "JOINGROUP" + CmdMsgPartEndChars + "', nClientID, '" + CmdMsgPartEndChars + "', strGroupID, '" + CmdMsgEndChars + "')); ");
+            sbDbSetup.Append("   END IF; ");
+            sbDbSetup.Append("END " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE PROCEDURE RevComm_LeaveGroup(nClientID INT(12)) ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") ");
+            sbDbSetup.Append("   VALUES (CONCAT('" + CmdMsgStartChars + "LEAVEGROUP" + CmdMsgPartEndChars + "', nClientID, '" + CmdMsgEndChars + "')); ");
+            sbDbSetup.Append("END " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE PROCEDURE RevComm_CloseGroup(strGroupID VARCHAR(36)) ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") ");
+            sbDbSetup.Append("   VALUES (CONCAT('" + CmdMsgStartChars + "CLOSEGROUP" + CmdMsgPartEndChars + "', strGroupID, '" + CmdMsgEndChars + "')); ");
+            sbDbSetup.Append("END " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE PROCEDURE RevComm_RegisterFile(tFileDesign " + strMsgFieldDataType + ", tFilePath " + strMsgFieldDataType + ") ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append("   INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") ");
+            sbDbSetup.Append("   VALUES (CONCAT('" + CmdMsgStartChars + "REGISTERFILE" + CmdMsgPartEndChars + "', tFileDesign, '" + CmdMsgPartEndChars + "', tFilePath, '" + CmdMsgEndChars + "')); ");
+            sbDbSetup.Append("END " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE PROCEDURE RevComm_RegisterDataQuery(tDatabaseDesign " + strMsgFieldDataType + ", ");
+            sbDbSetup.Append("                                           tDataDesign " + strMsgFieldDataType + ", ");
+            sbDbSetup.Append("                                           tDataStatement " + strMsgFieldDataType + ") ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append("   INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") ");
+            sbDbSetup.Append("   VALUES (CONCAT('" + CmdMsgStartChars + "REGISTERDATAQUERY" + CmdMsgPartEndChars + "', tDatabaseDesign, '" + CmdMsgPartEndChars + "', tDataDesign, '" + CmdMsgPartEndChars + "', tDataStatement, '" + CmdMsgEndChars + "')); ");
+            sbDbSetup.Append("END " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE PROCEDURE RevComm_RegisterDataStatement(tDatabaseDesign " + strMsgFieldDataType + ", ");
+            sbDbSetup.Append("                                               tDataDesign " + strMsgFieldDataType + ", ");
+            sbDbSetup.Append("                                               tDataStatement " + strMsgFieldDataType + ") ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append("   INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") ");
+            sbDbSetup.Append("   VALUES (CONCAT('" + CmdMsgStartChars + "REGISTERDATASTATEMENT" + CmdMsgPartEndChars + "', tDatabaseDesign, '" + CmdMsgPartEndChars + "', tDataDesign, '" + CmdMsgPartEndChars + "', tDataStatement, '" + CmdMsgEndChars + "')); ");
+            sbDbSetup.Append("END " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE PROCEDURE RevComm_RegisterDataEvent(tDatabaseDesign " + strMsgFieldDataType + ", ");
+            sbDbSetup.Append("                                           tEventDesign " + strMsgFieldDataType + ", ");
+            sbDbSetup.Append("                                           tDataStatement " + strMsgFieldDataType + ", ");
+            sbDbSetup.Append("                                           nIntervalAmount SMALLINT, ");
+            sbDbSetup.Append("                                           strIntervalType VARCHAR(25), ");
+            sbDbSetup.Append("                                           nDelayInMillisecs SMALLINT) ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append("   INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") ");
+            sbDbSetup.Append("   VALUES (CONCAT('" + CmdMsgStartChars + "REGISTERDATAEVENT" + CmdMsgPartEndChars + "', tDatabaseDesign, '" + CmdMsgPartEndChars + "', tEventDesign, '" + CmdMsgPartEndChars + "', tDataStatement, '" + CmdMsgPartEndChars + 
+                                                "', nIntervalAmount, '" + CmdMsgPartEndChars + "', strIntervalType, '" + CmdMsgPartEndChars + "', nDelayInMillisecs, '" + CmdMsgEndChars + "')); ");
+            sbDbSetup.Append("END " + strDelimiter + " ");
+            sbDbSetup.Append("CREATE PROCEDURE RevComm_RunDataProcess(tDataDesign " + strMsgFieldDataType + ", ");
+            sbDbSetup.Append("                                        tSetParamNameValueList " + strMsgFieldDataType + ") ");
+            sbDbSetup.Append("BEGIN ");
+            sbDbSetup.Append("   DECLARE tParamNameValueList " + strMsgFieldDataType + " DEFAULT ''; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   IF tSetParamNameValueList IS NOT NULL ");
+            sbDbSetup.Append("   THEN");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("       SET tParamNameValueList = tSetParamNameValueList; ");
+            sbDbSetup.Append("   END IF; ");
+            sbDbSetup.Append(" ");
+            sbDbSetup.Append("   INSERT INTO " + strMsgTableName + " (" + strMsgFieldName + ") ");
+            sbDbSetup.Append("   VALUES (CONCAT('" + CmdMsgStartChars + "RUNDATAOPERATION" + CmdMsgPartEndChars + "', tDataDesign, '" + CmdMsgPartEndChars + "true" + CmdMsgPartEndChars + "', REPLACE(tParamNameValueList, ',', '" + CmdMsgPartEndChars + "'), '" + CmdMsgEndChars + "')); ");
+            sbDbSetup.Append("END " + strDelimiter);
+
+            return sbDbSetup.ToString();
         }
 
         /// <summary>
@@ -9895,34 +10269,45 @@ namespace RevelationsStudios.RevCommServer {
 
             string strDelimiter = DBProcDelimiter;
                                     /* Database Replacement Script Deimiter for Procedures */
+            StringBuilder sbDbCleanUp = new StringBuilder();
+                                    /* Holder for Database Reset Setup Script */
 
-            return "DROP PROCEDURE IF EXISTS RevComm_JSONMsgGroupCreate " + strDelimiter + " " +
-                   "DROP PROCEDURE IF EXISTS RevComm_JSONMsgGroupDataResultCreate " + strDelimiter + " " +
-                   "DROP PROCEDURE IF EXISTS RevComm_JSONMsgCreate " + strDelimiter + " " +
-                   "DROP PROCEDURE IF EXISTS RevComm_JSONMsgJSVarUpdate " + strDelimiter + " " +
-                   "DROP PROCEDURE IF EXISTS RevComm_JSONMsgJSFuncCall " + strDelimiter + " " +
-                   "DROP PROCEDURE IF EXISTS RevComm_JSONMsgJSFuncAddParam  " + strDelimiter + " " +
-                   "DROP PROCEDURE IF EXISTS RevComm_JSONMsgSaveClose " + strDelimiter + " " +
-                   "DROP PROCEDURE IF EXISTS RevComm_JSONMsgsOutput " + strDelimiter + " " +
-                   "DROP PROCEDURE IF EXISTS RevComm_JSONMsgError " + strDelimiter + " " +
-                   "DROP PROCEDURE IF EXISTS RevComm_JSONMsgsClear " + strDelimiter + " " +
-                   "DROP PROCEDURE IF EXISTS RevComm_SendMsgUser " + strDelimiter + " " +
-                   "DROP PROCEDURE IF EXISTS RevComm_SendMsgUserByDesign " + strDelimiter + " " +
-                   "DROP PROCEDURE IF EXISTS RevComm_StartGroup " + strDelimiter + " " +
-                   "DROP PROCEDURE IF EXISTS RevComm_JoinGroup " + strDelimiter + " " +
-                   "DROP PROCEDURE IF EXISTS RevComm_LeaveGroup " + strDelimiter + " " +
-                   "DROP PROCEDURE IF EXISTS RevComm_CloseGroup " + strDelimiter + " " +
-                   "DROP PROCEDURE IF EXISTS RevComm_RegisterFile " + strDelimiter + " " +
-                   "DROP PROCEDURE IF EXISTS RevComm_RegisterDataEvent " + strDelimiter + " " +
-                   "DROP PROCEDURE IF EXISTS RevComm_RegisterDataQuery " + strDelimiter + " " +
-                   "DROP PROCEDURE IF EXISTS RevComm_RegisterDataStatement " + strDelimiter + " " +
-                   "DROP PROCEDURE IF EXISTS RevComm_RunDataProcess " + strDelimiter + " " +
-                   "DROP TABLE IF EXISTS revcomm_data_results " + strDelimiter + " " +
-                   "DROP TABLE IF EXISTS revcomm_msg_funccall_params " + strDelimiter + " " +
-                   "DROP TABLE IF EXISTS revcomm_msg_funccalls " + strDelimiter + " " +
-                   "DROP TABLE IF EXISTS revcomm_msg_varupdates " + strDelimiter + " " +
-                   "DROP TABLE IF EXISTS revcomm_msgs " + strDelimiter + " " +
-                   "DROP TABLE IF EXISTS revcomm_msg_groups " + strDelimiter;
+            sbDbCleanUp.Append("DROP PROCEDURE IF EXISTS RevComm_JSONMsgGroupCreate " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP PROCEDURE IF EXISTS RevComm_JSONMsgGroupDataResultCreate " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP PROCEDURE IF EXISTS RevComm_JSONMsgCreate " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP PROCEDURE IF EXISTS RevComm_JSONMsgJSVarUpdate " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP PROCEDURE IF EXISTS RevComm_JSONMsgJSFuncCall " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP PROCEDURE IF EXISTS RevComm_JSONMsgJSFuncAddParam  " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP PROCEDURE IF EXISTS RevComm_JSONMsgSaveClose " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP PROCEDURE IF EXISTS RevComm_JSONMsgsOutput " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP PROCEDURE IF EXISTS RevComm_JSONMsgError " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP PROCEDURE IF EXISTS RevComm_JSONMsgsClear " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP PROCEDURE IF EXISTS RevComm_SendMsgUser " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP PROCEDURE IF EXISTS RevComm_SendMsgUserByDesign " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP PROCEDURE IF EXISTS RevComm_StartGroup " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP PROCEDURE IF EXISTS RevComm_JoinGroup " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP PROCEDURE IF EXISTS RevComm_LeaveGroup " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP PROCEDURE IF EXISTS RevComm_CloseGroup " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP PROCEDURE IF EXISTS RevComm_RegisterFile " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP PROCEDURE IF EXISTS RevComm_RegisterDataEvent " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP PROCEDURE IF EXISTS RevComm_RegisterDataQuery " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP PROCEDURE IF EXISTS RevComm_RegisterDataStatement " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP PROCEDURE IF EXISTS RevComm_RunDataProcess " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP FUNCTION IF EXISTS RevComm_JSONMsgSaveCheck " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP FUNCTION IF EXISTS RevComm_OutputLimitCheck " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP TABLE IF EXISTS revcomm_data_results " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP TABLE IF EXISTS revcomm_msg_funccall_params " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP TABLE IF EXISTS revcomm_msg_funccalls " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP TABLE IF EXISTS revcomm_msg_varupdates " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP TABLE IF EXISTS revcomm_msgs " + strDelimiter + " ");
+            sbDbCleanUp.Append("DROP TABLE IF EXISTS revcomm_msg_groups " + strDelimiter);
+
+            return sbDbCleanUp.ToString();
+        }
+
+        public bool ConfirmMessageDataType(string strMsgDataType) {
+
+            return dictDBTypeMaxSize.ContainsKey(strMsgDataType.ToUpper());
         }
 
         /// <summary>

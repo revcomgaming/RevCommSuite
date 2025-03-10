@@ -4,7 +4,7 @@ RevCommClient - Connector for RevCommServer and peer to peer communications
 
  MIT License
 
- Copyright (c) 2023 RevComGaming
+ Copyright (c) 2025 RevComGaming
 
  Permission is hereby granted, free of charge, to any person obtaining a copy
  of this software and associated documentation files (the "Software"), to deal
@@ -208,9 +208,7 @@ RevCommClient - Connector for RevCommServer and peer to peer communications
 #include "Stdafx.h"
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#include <cstdlib>
 #include <string>
-#include <fstream>
 #include <time.h>
 #include <exception>
 
@@ -288,6 +286,8 @@ class PeerToPeerClientInfo {
 		SOCKET socClient;
 		string strHomeIPAddress,
 			   strPeerIPAddress;
+		int nHomePort,
+			nPeerPort;
 		char* pcharEncryptKey,
 			* pcharEncryptIV,
 		    * pcharDecryptKey,
@@ -332,14 +332,16 @@ class PeerToPeerClientInfo {
 
 	public:
 
-		PeerToPeerClientInfo(SOCKET socSetClient, 
-							 string strSetHomeIPAddress = "", 
-							 string strSetPeerIPAddress = "", 
-							 char* pcharSetEncryptKey = NULL, 
-							 char* pcharSetEncryptIV = NULL, 
-							 char* pcharSetDecryptKey = NULL, 
+		PeerToPeerClientInfo(SOCKET socSetClient,
+							 string strSetHomeIPAddress = "",
+							 int nSetHomePort = 0,
+							 string strSetPeerIPAddress = "",
+							 int nSetPeerPort = 0,
+							 char* pcharSetEncryptKey = NULL,
+							 char* pcharSetEncryptIV = NULL,
+							 char* pcharSetDecryptKey = NULL,
 							 char* pcharSetDecryptIV = NULL);
-		
+
 		void Send(string strMsg, bool boolTrack);
 		void Send(char* pcharMsg, int nMsgLen, bool boolTrack);
 		int Receive(char* pcharReturn);
@@ -360,6 +362,7 @@ class PeerToPeerClientInfo {
 		bool Connected();
 		bool NotWouldBlock();
 		void ClearWouldBlock();
+		int GetPeerPort();
 		string GetPeerIPAddress();
 
 		void SetReceivedMsgLateLimit(int nTimeInMillisecs);
@@ -369,7 +372,7 @@ class PeerToPeerClientInfo {
 
 		void SetNextClientInfo(PeerToPeerClientInfo* ppciSetNextInfo);
 		PeerToPeerClientInfo* GetNextClientInfo();
-		
+
 		void CloseClient();
 };
 
@@ -492,7 +495,7 @@ struct ClientServerInfo {
 
 						psctxAccessor = SSL_CTX_new(TLS_client_method());
 						boolConnectStarted = boolConnected = (pbioSecureCon = ConnectSecure(pcharServerHostNameIP,
-																 							IntToString(nSetServerPort),
+																 							to_string(nSetServerPort),
 																							psctxAccessor)) != NULL;
 					}
 					else {
@@ -503,7 +506,7 @@ struct ClientServerInfo {
 						aiInfo.ai_socktype = SOCK_STREAM;
 						aiInfo.ai_protocol = IPPROTO_TCP;
 
-						if (getaddrinfo(pcharServerHostNameIP, (char*)IntToString(nServerPort).c_str(), &aiInfo, &paiList) == 0) {
+						if (getaddrinfo(pcharServerHostNameIP, (char*)to_string(nServerPort).c_str(), &aiInfo, &paiList) == 0) {
 
 							paiSelected = paiList;
 
@@ -514,9 +517,9 @@ struct ClientServerInfo {
 
 							while (paiSelected != NULL) {
 
-								socServerConn = socket(paiSelected->ai_family,
-													   paiSelected->ai_socktype,
-													   paiSelected->ai_protocol);
+								socServerConn = socket(paiSelected -> ai_family,
+													   SOCK_STREAM,
+													   IPPROTO_TCP);
 
 								if (socServerConn != INVALID_SOCKET) {
 
@@ -526,9 +529,10 @@ struct ClientServerInfo {
 
 										if (ioctlsocket(socServerConn, FIONBIO, &ulMode) != 0) {
 
-											AddLogErrorMsg("During client-server connection for server, setting non-blocking on socket failed. WSA error code: " + IntToString(WSAGetLastError()) + ".");
+											AddLogErrorMsg("During client-server connection for server, setting non-blocking on socket failed. WSA error code: " + to_string(WSAGetLastError()) + ".");
 										}
 
+										freeaddrinfo(paiSelected);
 										paiSelected = NULL;
 										boolConnectStarted = true;
 										boolConnected = true;
@@ -537,7 +541,7 @@ struct ClientServerInfo {
 
 										paiSelected = paiSelected->ai_next;
 
-										AddLogErrorMsg("During client-server connection for server, connecting to server failed. WSA error code: " + IntToString(WSAGetLastError()) + ".");
+										AddLogErrorMsg("During client-server connection for server, connecting to server failed. WSA error code: " + to_string(WSAGetLastError()) + ".");
 										closesocket(socServerConn);
 										socServerConn = NULL;
 									}
@@ -546,9 +550,12 @@ struct ClientServerInfo {
 
 									paiSelected = paiSelected->ai_next;
 									socServerConn = NULL;
-									AddLogErrorMsg("During client-server connection for server, setting up setting up socket for connecting to server failed, connecting to server failed. WSA error code: " + IntToString(WSAGetLastError()) + ".");
+									AddLogErrorMsg("During client-server connection for server, setting up setting up socket for connecting to server failed, connecting to server failed. WSA error code: " + to_string(WSAGetLastError()) + ".");
 								}
 							}
+
+							freeaddrinfo(paiList);
+							freeaddrinfo(&aiInfo);
 						}
 						else {
 
@@ -558,7 +565,7 @@ struct ClientServerInfo {
 
 					if (boolConnected && !AddSendMsg("GETSTREAMFILELIST")) {
 
-						csiOpInfo.AddLogErrorMsg("During client-server connection for server, sending message 'GETSTREAMFILELIST' failed.");
+						AddLogErrorMsg("During client-server connection for server, sending message 'GETSTREAMFILELIST' failed.");
 					}
 				}
 				else {
@@ -690,7 +697,7 @@ struct ClientServerInfo {
 							else if (nSendErrorCode != WSAEWOULDBLOCK && nSendErrorCode != 0) {
 
 								AddLogErrorMsg("During running server message sender and receiver, receiving message through UDP from server failed. Error code: " + 
-												IntToString(nSendErrorCode));
+												to_string(nSendErrorCode));
 							}
 						}
 
@@ -705,11 +712,11 @@ struct ClientServerInfo {
 							if (boolUseSSL) {
 
 								AddLogErrorMsg("During running server message sender and receiver, receiving message from server failed through SSL connection. Error code: " +
-												IntToString(nSendErrorCode));
+												to_string(nSendErrorCode));
 							}
 							else {
 
-								AddLogErrorMsg("During running server message sender and receiver, receiving message from server failed. Error code: " + IntToString(nSendErrorCode));
+								AddLogErrorMsg("During running server message sender and receiver, receiving message from server failed. Error code: " + to_string(nSendErrorCode));
 							}
 
 							boolRunConnection = false;
@@ -743,7 +750,7 @@ struct ClientServerInfo {
 			}
 			else {
 
-				AddLogErrorMsg("During running server message sender and receiver, connecting to server failed. WSA error code: " + IntToString(WSAGetLastError()) + ".");
+				AddLogErrorMsg("During running server message sender and receiver, connecting to server failed. WSA error code: " + to_string(WSAGetLastError()) + ".");
 				boolRunConnection = false;
 			}
 
@@ -781,9 +788,13 @@ struct ClientServerInfo {
 		sockaddr_in saiPeerToPeerInfo;	/* Connecting Client Information */
 		int nPeerToPeerInfoSize = sizeof(saiPeerToPeerInfo);
 										/* Size of Connecting Client Information */
+//			
+//			nPeerPort = 0;				/* Current IP Address */
 /*		string strHomeIPAddress = "",	/* Client's IP Address */
+//			   strHomePort = "",		/* Client's Port */
 /*			   strPeerIPAddress = "";	/* Current IP Address */
-//			   astrParams[1] = { "" };	/* Message Parameters for Getting Client Encryption Information */
+//			   strPeerPort = "",		/* Current Port */
+//			   astrParams[2] = { "" };	/* Message Parameters for Getting Client Encryption Information */
 //		MsgInfo* pmsiMsg = NULL;		/* Selected Message Information and Peviously Selected */
 //		char* pcharSetEncryptKey = NULL,
 //			* pcharSetEncryptIV = NULL; /* Encryption Key and IV Block */
@@ -887,20 +898,22 @@ struct ClientServerInfo {
 				if (socNewClient != INVALID_SOCKET) {
 
 					string strPeerIPAddress = string(inet_ntoa(saiPeerToPeerInfo.sin_addr)),
-						   strHomeIPAddress = "",
-						   astrParams[1] = { strPeerIPAddress };
+						   strPeerPort = to_string(htons(saiPeerToPeerInfo.sin_port)),
+						   strHomeIPAddress = "", 
+						   strHomePort = "",
+						   astrParams[2] = { strPeerIPAddress, strPeerPort };
 					bool boolIPNotFound = true;	
 					
 
 					/* Check If Existing Encryption Infromation Exists */
-					MsgInfo* pmsiMsg = DequeueReceivedMsg("PEERTOPEERENCRYPT", astrParams, 1);
+					MsgInfo* pmsiMsg = DequeueReceivedMsg("PEERTOPEERENCRYPT", astrParams, 2);
 					char* pcharSetEncryptKey = NULL,
 						* pcharSetEncryptIV = NULL;
 
 					if (pmsiMsg != NULL) {
 					
-						pcharSetEncryptKey = pmsiMsg -> GetSegment(2);
-						pcharSetEncryptIV = pmsiMsg -> GetSegment(3);
+						pcharSetEncryptKey = pmsiMsg -> GetSegment(3);
+						pcharSetEncryptIV = pmsiMsg -> GetSegment(4);
 					}
 
 					ppciSelected = ppciListClients;
@@ -909,7 +922,8 @@ struct ClientServerInfo {
 					/* Check If Connection Already Exists, Get Previously Connected One for Negotiation Check */
 					while (ppciSelected != NULL && boolIPNotFound) {
 
-						if (ppciSelected -> GetPeerIPAddress() == strPeerIPAddress) {
+						if (ppciSelected -> GetPeerIPAddress() == strPeerIPAddress &&
+							to_string(ppciSelected -> GetPeerPort()) == strPeerPort) {
 
 							ppciPrevious = ppciSelected;
 							boolIPNotFound = false;
@@ -939,7 +953,9 @@ struct ClientServerInfo {
 							/* Add Connection with Possible Encryption */
 							ppciSelected -> SetNextClientInfo(new PeerToPeerClientInfo(socNewClient, 
 																					   strHomeIPAddress,
+																					   atoi(strHomePort.c_str()),
 																					   strPeerIPAddress,
+																					   atoi(strPeerPort.c_str()),
 																					   pcharSetEncryptKey, 
 																					   pcharSetEncryptIV,
 																					   pcharPeerToPeerDecryptKey,
@@ -950,7 +966,9 @@ struct ClientServerInfo {
 							/* Else This is First Connection and Possibly Has Encryption */
 							ppciListClients = new PeerToPeerClientInfo(socNewClient, 
 																	   strHomeIPAddress,
+																	   atoi(strHomePort.c_str()),
 																	   strPeerIPAddress,
+																	   atoi(strPeerPort.c_str()),
 																	   pcharSetEncryptKey, 
 																	   pcharSetEncryptIV,
 																	   pcharPeerToPeerDecryptKey,
@@ -962,7 +980,9 @@ struct ClientServerInfo {
 						/* Set as Start of List with Possible Encryption */
 						ppciPrevious -> StartNegotiation(new PeerToPeerClientInfo(socNewClient, 
 																				  strHomeIPAddress,
+																				  atoi(strHomePort.c_str()),
 																				  strPeerIPAddress,
+																				  atoi(strPeerPort.c_str()),
 																				  pcharSetEncryptKey, 
 																				  pcharSetEncryptIV,
 																				  pcharPeerToPeerDecryptKey,
@@ -973,7 +993,7 @@ struct ClientServerInfo {
 				}
 				else if (nSendErrorCode != WSAEWOULDBLOCK) {
 				
-					AddLogErrorMsg("During running 'Peer To Peer' client message sender and receiver, accepting 'Peer to Peer' clients failed. WSA error code: " + IntToString(nSendErrorCode) + ".");
+					AddLogErrorMsg("During running 'Peer To Peer' client message sender and receiver, accepting 'Peer to Peer' clients failed. WSA error code: " + to_string(nSendErrorCode) + ".");
 				}
 			}
 			else {
@@ -995,6 +1015,7 @@ struct ClientServerInfo {
 									/* Message for Getting Message Replay */
 			   * pmsiSelect = pmsiListBackupSent; 
 									/* Selected Message Information Record */
+		bool boolMsgFound = false;	/* Indicator That Was Not Found */
  // 		int nSeqReplayNum = 0,		/* Message Sequence Number for Start of Replay */
 		int nSendLen = 0;			/* Length of Total Message to Send */
 		char* pcharWholeSend = NULL;/* Total Message to be Sent */
@@ -1013,8 +1034,13 @@ struct ClientServerInfo {
 				int nSeqReplayNum = atoi(MsgInfo::FindSegmentInString(pmsiMsg -> GetMsgString(), 1));
 
 				while (pmsiSelect != NULL) {
+
+					if (!boolMsgFound) {
+
+						boolMsgFound = pmsiSelect-> GetMetaDataSeqNum() == nSeqReplayNum;
+					}
 				
-					if (pmsiSelect -> GetMetaDataSeqNum() >= nSeqReplayNum) {
+					if (boolMsgFound) {
 					
 						if (pcharWholeSend != NULL) {
 						
@@ -1029,6 +1055,11 @@ struct ClientServerInfo {
 					}
 
 					pmsiSelect = pmsiSelect -> GetNextMsgInfo();
+
+					if (boolMsgFound && pmsiSelect-> GetMetaDataSeqNum() > nSeqReplayNum) {
+
+						pmsiSelect = NULL;
+					}
 				}
 
 				if (nSendLen > 0) {
@@ -1113,7 +1144,7 @@ struct ClientServerInfo {
 
 						if (nSendErrorCode != WSAEWOULDBLOCK && nSendErrorCode != 0) {
 
-							AddLogErrorMsg(strErrorMsg + " Error code : " + IntToString(nSendErrorCode));
+							AddLogErrorMsg(strErrorMsg + " Error code : " + to_string(nSendErrorCode));
 						}
 					}
 				}
@@ -1220,12 +1251,12 @@ struct ClientServerInfo {
 		/* If Information was Found, Connect to "Peer To Peer" Server */
 		if (strPeerToPeerServerIP != "" && strPeerToPeerServerPort != "") {
 
-
 			ppciSelected = ppciListClients;
 
 			while (ppciSelected != NULL && boolIPNotFound) {
 			
-				if (ppciSelected -> GetPeerIPAddress() == strPeerToPeerServerIP) {
+				if (ppciSelected -> GetPeerIPAddress() == strPeerToPeerServerIP &&
+					to_string(ppciSelected -> GetPeerPort()) == strPeerToPeerServerPort) {
 							
 					ppciPrevious = ppciSelected;
 					boolIPNotFound = false;
@@ -1271,7 +1302,9 @@ struct ClientServerInfo {
 
 								ppciSelected -> SetNextClientInfo(new PeerToPeerClientInfo(socServer, 
 																						   strHomeIPAddress,
+																						   0,
 																						   strPeerToPeerServerIP, 
+																						   atoi(strPeerToPeerServerPort.c_str()),
 																						   pcharEncryptKey, 
 																						   pcharEncryptIV, 
 																						   pcharPeerToPeerDecryptKey, 
@@ -1281,7 +1314,9 @@ struct ClientServerInfo {
 							
 								ppciPrevious -> StartNegotiation(new PeerToPeerClientInfo(socServer, 
 																						  strHomeIPAddress,
-																						  strPeerToPeerServerIP, 
+																						  0,
+																						  strPeerToPeerServerIP,
+																						  atoi(strPeerToPeerServerPort.c_str()),
 																						  pcharEncryptKey, 
 																						  pcharEncryptIV, 
 																						  pcharPeerToPeerDecryptKey, 
@@ -1292,7 +1327,9 @@ struct ClientServerInfo {
 								
 							ppciListClients = new PeerToPeerClientInfo(socServer, 
 																	   strHomeIPAddress,
-																	   strPeerToPeerServerIP, 
+																	   0,
+																	   strPeerToPeerServerIP,
+																	   atoi(strPeerToPeerServerPort.c_str()),
 																	   pcharEncryptKey, 
 																	   pcharEncryptIV, 
 																	   pcharPeerToPeerDecryptKey, 
@@ -1314,18 +1351,19 @@ struct ClientServerInfo {
 				}
 				else {
 					
-					AddLogErrorMsg("During connecting to 'Peer To Peer' server, connecting to server failed. WSA error code: " + IntToString(WSAGetLastError()) + ".");
+					AddLogErrorMsg("During connecting to 'Peer To Peer' server, connecting to server failed. WSA error code: " + to_string(WSAGetLastError()) + ".");
 					closesocket(socServer);
 					socServer = NULL;
 					
 					/* If Encryption Information Doesn't Already Exist for this Client, Store for Later Connection */
-					string astrParams[1] = { strPeerToPeerServerIP };
+					string astrParams[2] = { strPeerToPeerServerIP, strPeerToPeerServerPort };
 
 					if (pcharEncryptKey != NULL && pcharEncryptIV != NULL && FindReceivedMsg("PEERTOPEERENCRYPT", astrParams, 1) == NULL) {
 
 						int nEncryptSaveIndex = 0,
 							nMsgPartIndicateLen = strMsgPartIndicate.length(),
-							nEncryptSaveLen = strMsgStartIndicate.length() + strMsgEndIndicate.length() + nMsgPartIndicateLen * 3 + strPeerToPeerServerIP.length() + ENCRYPTKEYSIZE + ENCRYPTIVSIZE + 18;
+							nEncryptSaveLen = strMsgStartIndicate.length() + strMsgEndIndicate.length() + nMsgPartIndicateLen * 4 + strPeerToPeerServerIP.length() + 
+											  strPeerToPeerServerPort.length() + ENCRYPTKEYSIZE + ENCRYPTIVSIZE + 18;
 						char* pcharEncryptSave = new char[nEncryptSaveLen];
 
 						PrepStringOut(strMsgStartIndicate, pcharEncryptSave, nEncryptSaveLen);
@@ -1339,6 +1377,12 @@ struct ClientServerInfo {
 
 						PrepStringOut(strPeerToPeerServerIP, pcharEncryptSave + nEncryptSaveIndex, nEncryptSaveLen);
 						nEncryptSaveIndex += strPeerToPeerServerIP.length();
+
+						PrepStringOut(strMsgPartIndicate, pcharEncryptSave + nEncryptSaveIndex, nEncryptSaveLen);
+						nEncryptSaveIndex += nMsgPartIndicateLen;
+
+						PrepStringOut(strPeerToPeerServerPort, pcharEncryptSave + nEncryptSaveIndex, nEncryptSaveLen);
+						nEncryptSaveIndex += strPeerToPeerServerPort.length();
 
 						PrepStringOut(strMsgPartIndicate, pcharEncryptSave + nEncryptSaveIndex, nEncryptSaveLen);
 						nEncryptSaveIndex += nMsgPartIndicateLen;
@@ -1362,7 +1406,8 @@ struct ClientServerInfo {
 			else {
 							
 				socServer = NULL;
-				AddLogErrorMsg("During connecting to 'Peer To Peer' server, setting up setting up socket for connecting to server failed, connecting to server failed. WSA error code: " + IntToString(WSAGetLastError()) + ".");
+				AddLogErrorMsg("During connecting to 'Peer To Peer' server, setting up setting up socket for connecting to server failed, connecting to server failed. WSA error code: " + 
+							   to_string(WSAGetLastError()) + ".");
 			}
 		}			
 		else {
@@ -1705,7 +1750,7 @@ struct ClientServerInfo {
 		}
 		catch (exception& exError) {
 
-			AddLogErrorMsg("During dequeuing stored message segment number, '" + IntToString(nSegNumSelect) + "', an exception occurred.", exError.what());
+			AddLogErrorMsg("During dequeuing stored message segment number, '" + to_string(nSegNumSelect) + "', an exception occurred.", exError.what());
 		}
 	
 		return pmsiStart;
@@ -1815,7 +1860,7 @@ struct ClientServerInfo {
 					}
 					else {
 
-						strErrorMsg = "During processing file from stream, getting file parts failed due out of order messages. File type: '" + string(pcharFileDesign) + "' messages deleted. " + IntToString(nMsgNumTest) + " " + IntToString(nMsgNumLast) + " " + IntToString(nFileLen);
+						strErrorMsg = "During processing file from stream, getting file parts failed due out of order messages. File type: '" + string(pcharFileDesign) + "' messages deleted. " + to_string(nMsgNumTest) + " " + to_string(nMsgNumLast) + " " + to_string(nFileLen);
 						boolContinue = false;
 					}
 				}
@@ -1872,6 +1917,60 @@ struct ClientServerInfo {
 		}
 
 		return pmsiStart;
+	}
+
+	/* Finds Received Message By Message Type with Criteria List Match
+	   Return: Message's String and Removes it from List of Received Messages, Else Empty String If Not Found or Fails */
+	string GetDequeueReceivedMsg(string strMsgTypeName, string astrMsgCrit[], int nMsgCritLen) {
+
+		MsgInfo* pmsiMsg = FindReceivedMsg(strMsgTypeName, astrMsgCrit, nMsgCritLen, true),
+			   * pmsiPrevious = NULL;
+		string strMsg = "";
+
+		while (pmsiMsg != NULL) {
+
+			strMsg.append(pmsiMsg->GetMsgString());
+			pmsiPrevious = pmsiMsg;
+			pmsiMsg = pmsiMsg->GetNextMsgInfo();
+
+			delete pmsiPrevious;
+			pmsiPrevious = NULL;
+		}
+
+		return strMsg;
+	}
+
+	/* Finds Received Message By Message Type with Criteria List Match
+	   Return: Message's String and Removes it from List of Received Messages, Else Empty String If Not Found or Fails */
+	string GetDequeueReceivedMsg(string strMsgTypeName) {
+		
+		string astrParams[1] = { "" };					/* Message Parameters */
+
+		return GetDequeueReceivedMsg(strMsgTypeName, astrParams, 0);
+	}
+
+	/* Finds Stored Message By Message Type with Criteria List Match
+	   Return: Message's String and Removes it from List of Stored Messages, Else Empty String If Not Found or Fails */
+	string GetDequeueStoredMsg(string strMsgTypeName, string astrMsgCrit[], int nMsgCritLen) {
+
+		MsgInfo* pmsiMsg = DequeueStoredMsg(strMsgTypeName, astrMsgCrit, nMsgCritLen),
+			   * pmsiPrevious = NULL;
+		string strMsg = "";
+
+		if (pmsiMsg != NULL) {
+
+			while (pmsiMsg != NULL) {
+
+				strMsg.append(pmsiMsg->GetMsgString());
+				pmsiPrevious = pmsiMsg;
+				pmsiMsg = pmsiMsg->GetNextMsgInfo();
+
+				delete pmsiPrevious;
+				pmsiPrevious = NULL;
+			}
+		}
+
+		return strMsg;
 	}
 
 	/* Length of Name and Path of File in Stream
@@ -1962,7 +2061,7 @@ struct ClientServerInfo {
 				else if (pcharSentFileSize != NULL) {
 				
 					AddLogErrorMsg("During checking if file is in stream, invalid file size of " + 
-								    IntToString(nCurrentLen) + " out of expected total of " + string(pcharSentFileSize) + 
+								    to_string(nCurrentLen) + " out of expected total of " + string(pcharSentFileSize) + 
 								   " was found. File should be removed from stream as download failure.");
 				}
 				else {
@@ -2254,7 +2353,7 @@ struct ClientServerInfo {
 									/* Selected "Peer To Peer" Client Information */
 		
 		try {
-							
+
 			boolPeerToPeerClient = false;
 			boolPeerToPeerServer = false;
 				
@@ -2293,16 +2392,52 @@ struct ClientServerInfo {
 		}
 	}
 
+	void PrepReturnMessagePart(string strMsg, char* pcharRetMsg, char* pcharRetMsgLen, int nMsgPartIndex) {
+
+		try {
+
+			PrepStringOut(
+				to_string(
+					PrepCharArrayOut(MsgInfo::FindSegmentInString(strMsg, nMsgPartIndex),
+									 pcharRetMsg,
+									 MsgInfo::FindSegmentLengthInString(strMsg, nMsgPartIndex),
+									 atoi(pcharRetMsgLen))),
+				pcharRetMsgLen,
+				MSGLENSIZE);
+		}
+		catch (exception& exError) {
+
+			AddLogErrorMsg("During getting message part failed, an exception occurred.", exError.what());
+		}
+	}
+
 	/* Prepares Char Array to Pass as Pointer to Remotely Called Function */
 	int PrepCharArrayOut(char* pcharValue, char* pcharValueOut, int nValueLen, int nOutLen) {
 
-		if (nValueLen > nOutLen) {
+		if (pcharValueOut != NULL && pcharValue != NULL) {
 
-			nValueLen = nOutLen;
+			if (nValueLen > nOutLen) {
+
+				nValueLen = nOutLen;
+			}
+
+			memset(pcharValueOut, '\0', nOutLen);
+			memcpy(pcharValueOut, pcharValue, nValueLen);
 		}
+		else {
+		
+			nValueLen = 0;
 
-		memset(pcharValueOut, '\0', nOutLen);
-		memcpy(pcharValueOut, pcharValue, nValueLen);
+			if (pcharValueOut == NULL) {
+
+				AddLogErrorMsg("During prepping message array for output, invalid out value was send.");
+			}
+
+			if (pcharValue == NULL) {
+
+				AddLogErrorMsg("During prepping message array for output, invalid sent value was send.");
+			}
+		}
 
 		return nValueLen;
 	}
@@ -2311,11 +2446,6 @@ struct ClientServerInfo {
 	int PrepStringOut(string strValue, char* pcharValueOut, int nOutLen) {
 
 		return PrepCharArrayOut((char *)strValue.c_str(), pcharValueOut, strValue.length(), nOutLen);
-	}
-
-	string IntToString(int nValue) {
-		
-		return to_string((long long) nValue);
 	}
 
 	string BoolToString(bool boolValue) {
@@ -2817,76 +2947,63 @@ struct ClientServerInfo {
 		/* Uses System Command Line to Start Server */
 		void StartServer(int nUseServerPort, bool boolUseServerSSLPort) {
 
-			system(("start RevCommServer " + string(pcharServerHostNameIP) + " " + IntToString(nUseServerPort)).c_str());
+			system(("start RevCommServer " + string(pcharServerHostNameIP) + " " + to_string(nUseServerPort)).c_str());
 		}
 
 		/* Start Server for Receiving "Peer To Peer" Connections */
-		void StartPeerToPeerServer()  {
+		void StartPeerToPeerServer() {
 
-			addrinfo aiPeerToPeerInfo;		/* "Peer To Peer" Server Setup Information */
-			int nPeerToPeerInfoSize;		/* "Peer To Peer" Server Setup Information */
-			addrinfo* paiPeerToPeerSettings = NULL;
-											/* Settings for "Peer To Peer" Server */
+//			sockaddr_in saiPeerToPeerInfo = {};
+											/* "Peer To Peer" Server Setup Information */
 			u_long ulMode = 1;				/* Mode for Turning on Non-Blocking in Socket */
 
 			try {
-			
+
 				/* If Client is Not Already Connected to a Server */
 				if (!boolPeerToPeerServer) {
 
-					nPeerToPeerInfoSize = sizeof(aiPeerToPeerInfo);
-					ZeroMemory(&aiPeerToPeerInfo, nPeerToPeerInfoSize);
+					sockaddr_in saiPeerToPeerInfo = {};
+					saiPeerToPeerInfo.sin_family = AF_INET;
+					saiPeerToPeerInfo.sin_port = htons(nPeerToPeerPort);
+					saiPeerToPeerInfo.sin_addr.S_un.S_addr = INADDR_ANY;
 
-					aiPeerToPeerInfo.ai_family = AF_INET;
-					aiPeerToPeerInfo.ai_socktype = SOCK_STREAM;
-					aiPeerToPeerInfo.ai_protocol = IPPROTO_TCP;
-					aiPeerToPeerInfo.ai_flags = AI_PASSIVE;
-				 
 					socPeerToPeer = socket(AF_UNSPEC, SOCK_STREAM, IPPROTO_TCP);
 
 					if (socPeerToPeer != INVALID_SOCKET) {
 
-						if (getaddrinfo(strPeerToPeerIP.c_str(), (char *)IntToString(nPeerToPeerPort).c_str(), &aiPeerToPeerInfo, &paiPeerToPeerSettings) == 0) {
-						
-							if (ioctlsocket(socPeerToPeer, FIONBIO, &ulMode) == NO_ERROR) {
-							
-								if (bind(socPeerToPeer, paiPeerToPeerSettings -> ai_addr, (int)paiPeerToPeerSettings -> ai_addrlen) == 0) {
-						
-									if (listen(socPeerToPeer, SOMAXCONN) != SOCKET_ERROR) {
-									
-										boolPeerToPeerServer = true;
-									}
-									else {
-				
-										closesocket(socPeerToPeer);
-										AddLogErrorMsg("During setting up for 'Peer to Peer' connections, starting listening mode failed. WSA error code: " + IntToString(WSAGetLastError()) + ".");
-									}
+						if (ioctlsocket(socPeerToPeer, FIONBIO, &ulMode) == NO_ERROR) {
+
+							if (bind(socPeerToPeer, (sockaddr *)&saiPeerToPeerInfo, sizeof(saiPeerToPeerInfo)) == 0) {
+
+								if (listen(socPeerToPeer, SOMAXCONN) != SOCKET_ERROR) {
+
+									boolPeerToPeerServer = true;
 								}
 								else {
 
 									closesocket(socPeerToPeer);
-									AddLogErrorMsg("During setting up 'Peer to Peer' server, binding to socket failed. WSA error code: " + IntToString(WSAGetLastError()) + ".");
+									AddLogErrorMsg("During setting up for 'Peer to Peer' connections, starting listening mode failed. WSA error code: " + to_string(WSAGetLastError()) + ".");
 								}
 							}
 							else {
 
 								closesocket(socPeerToPeer);
-								AddLogErrorMsg("During setting up 'Peer to Peer' server, setting socket to non-blocking failed. WSA error code: " + IntToString(WSAGetLastError()) + ".");
+								AddLogErrorMsg("During setting up 'Peer to Peer' server, binding to socket failed. WSA error code: " + to_string(WSAGetLastError()) + ".");
 							}
 						}
 						else {
 
 							closesocket(socPeerToPeer);
-							AddLogErrorMsg("During setting up 'Peer to Peer' server, getting socket address information. WSA error code: " + IntToString(WSAGetLastError()) + ".");
+							AddLogErrorMsg("During setting up 'Peer to Peer' server, setting socket to non-blocking failed. WSA error code: " + to_string(WSAGetLastError()) + ".");
 						}
 					}
 					else {
 
-						AddLogErrorMsg("During setting up 'Peer to Peer' server, setting up socket failed. WSA error code: " + IntToString(WSAGetLastError()) + ".");
+						AddLogErrorMsg("During setting up 'Peer to Peer' server, setting up socket failed. WSA error code: " + to_string(WSAGetLastError()) + ".");
 					}
-				}	
+				}
 				else {
-					
+
 					AddLogErrorMsg("During setting up 'Peer to Peer' server, client not connected to main server or 'Peer to Peer' server already started.");
 				}
 			}
@@ -2934,7 +3051,7 @@ struct ClientServerInfo {
 						psctxUDPAccess = SSL_CTX_new(DTLS_client_method());
 					
 						if ((pbioSecureUDPCon = ConnectSecure(pcharServerHostNameIP,
-															  IntToString(nServerPort),
+															  to_string(nServerPort),
 															  psctxUDPAccess)) != NULL) {
 
 							astrParams[0] = "true";
@@ -2967,7 +3084,7 @@ struct ClientServerInfo {
 										if (ioctlsocket(socUDPConn, FIONBIO, &ulMode) != 0) {
 									
 											AddLogErrorMsg("During processing message 'UDPSWITCHNOTICE', setting non-blocking on socket failed. WSA error code: " + 
-														   IntToString(WSAGetLastError()) + ".");
+														   to_string(WSAGetLastError()) + ".");
 										}
 
 										astrParams[0] = "true";
@@ -2975,14 +3092,14 @@ struct ClientServerInfo {
 									else {
 
 										AddLogErrorMsg("During processing message 'UDPSWITCHNOTICE', connecting to server failed. WSA error code: " + 
-													   IntToString(WSAGetLastError()) + ".");
+													   to_string(WSAGetLastError()) + ".");
 										socUDPConn = NULL;
 									}
 								}
 								else {
 
-									AddLogErrorMsg("During processing message 'UDPSWITCHNOTICE', UDP socket maximum size of " + IntToString(unMaxMsgSize) + 
-												   " smaller than set size of " + IntToString(UDPBUFFERSIZE) + ".");
+									AddLogErrorMsg("During processing message 'UDPSWITCHNOTICE', UDP socket maximum size of " + to_string(unMaxMsgSize) + 
+												   " smaller than set size of " + to_string(UDPBUFFERSIZE) + ".");
 									socUDPConn = NULL;
 								}
 							}
@@ -2995,7 +3112,7 @@ struct ClientServerInfo {
 						else {
 
 							AddLogErrorMsg("During processing message 'UDPSWITCHNOTICE', setting up setting up UDP socket failed. WSA error code: " + 
-										   IntToString(WSAGetLastError()) + ".");
+										   to_string(WSAGetLastError()) + ".");
 							socUDPConn = NULL;
 						}
 					}
@@ -3005,7 +3122,10 @@ struct ClientServerInfo {
 					AddLogErrorMsg("Processing message 'UDPSWITCHNOTICE' failed due to invalid message. Message: '" + pmsiMsg -> GetMsgString() + "'.");
 				}
 
-				AddSendMsg("UDPSWITCHCONFIRM", astrParams, 1, true);
+				if (!AddSendMsg("UDPSWITCHCONFIRM", astrParams, 1, true)) {
+
+					AddLogErrorMsg("Processing message 'UDPSWITCHNOTICE' sending message failed to server.");
+				}
 
 				delete pmsiMsg;
 				pmsiMsg = NULL;
@@ -4064,7 +4184,7 @@ struct ClientServerInfo {
 
 						if (nSendErrorCode != WSAEWOULDBLOCK && nSendErrorCode != 0) {
 
-							AddLogErrorMsg(strErrorMsg + " Error code : " + IntToString(nSendErrorCode));
+							AddLogErrorMsg(strErrorMsg + " Error code : " + to_string(nSendErrorCode));
 						}
 						else {
 
@@ -4137,8 +4257,7 @@ struct ClientServerInfo {
 
 							for (nCounter = 0; nCounter < nMsgCritLen && boolCritMatch; nCounter++) {
 
-								boolCritMatch = strcmp(pmsiSelect->GetSegment(nCounter + 1),(char *)astrMsgCrit[nCounter].c_str()) == 0;
-								//boolCritMatch = MsgInfo::FindInString(pmsiSelect -> GetSegment(nCounter + 1), astrMsgCrit[nCounter], pmsiSelect -> GetSegmentLength(nCounter + 1)) == 0;
+								boolCritMatch = strcmp(pmsiSelect -> GetSegment(nCounter + 1),(char *)astrMsgCrit[nCounter].c_str()) == 0;
 							}
 
 							if (boolCritMatch && MsgInfo::FindInString(pmsiSelect -> GetSegment(0), strMsgTypeName, pmsiSelect -> GetSegmentLength(0)) == 0) {
@@ -4684,29 +4803,65 @@ struct ClientServerInfo {
 		char* DebugMaskPeerToPeerIP(char* pcharMsg, int nMsgLen) {
 		
 			int nIPLength = 0;		/* Length of Segment to Remove IP Addresses */
-			//nIPIndex = MsgInfo::FindInString(pcharMsg, MsgInfo::FindSegmentInString(strMsg, 1), nMsgLen, nIPLength),
-									/* Index of Segment to Remove IP Addresses */
+			//nIPIndex = 0,			/* Index of Segment to Remove IP Addresses */
+			//nSegNum = 1,			/* Selected Segment Number to Mask */
 			//nCounter = 0;			/* Counter for Loop */
 		
 			if (pcharMsg != NULL) {
 
-				if (MsgInfo::FindInString(pcharMsg, "PEERTOPEER", nMsgLen) >= 0 && 
-					(nIPLength = MsgInfo::FindSegmentLengthInString(pcharMsg, 1, nMsgLen)) > 0) {
-
-					int nIPIndex = MsgInfo::FindInString(pcharMsg, MsgInfo::FindSegmentInString(pcharMsg, 1, nMsgLen), nMsgLen, nIPLength),
+				if (MsgInfo::FindInString(pcharMsg, "PEERTOPEER", nMsgLen) >= 0) {
+				
+					int nIPIndex = 0,
+						nSegNum = 1,
 						nCounter = 0;
 
-					if (nIPIndex >= 0) {
-				
-						for (nCounter = nIPIndex; nCounter < nIPLength; nCounter++) {
-					
-							*(pcharMsg + nCounter) = '#';
+					while ((nIPLength = MsgInfo::FindSegmentLengthInString(pcharMsg, nSegNum, nMsgLen)) > 0 && nSegNum < 5) {
+
+						nIPIndex = MsgInfo::FindInString(pcharMsg, MsgInfo::FindSegmentInString(pcharMsg, nSegNum++, nMsgLen), nMsgLen, nIPLength);
+
+						if (nIPIndex >= 0) {
+
+							nIPLength += nIPIndex;
+
+							for (nCounter = nIPIndex; nCounter < nIPLength; nCounter++) {
+
+								*(pcharMsg + nCounter) = '#';
+							}
 						}
+					}
+				} 
+			}
+
+			return pcharMsg;
+		}
+
+		/* Get IP Address */
+		string GetIPAddress(int nIPIndex = 0) {
+	
+			char charHostName[255];		/* Holder for Host Name */
+	//		struct hostent* heHostInfo; /* Host Information */
+	//		struct in_addr **pIPAddressList;
+										/* List of IP Addresses */
+			char* pcharIPAddress = NULL;/* Host IP Address */ 
+			string strRetIPAddress = "";/* Returned IP Address */
+			int nCounter = 0;			/* Counter for Loop */
+
+			if (gethostname(charHostName, 255) == 0) {
+
+				struct hostent* heHostInfo = gethostbyname(charHostName);
+
+				if (heHostInfo != NULL) {
+
+					struct in_addr** pIPAddressList = (struct in_addr**)heHostInfo -> h_addr_list;
+
+					if (pIPAddressList[nIPIndex] != NULL && (pcharIPAddress = inet_ntoa(*pIPAddressList[nIPIndex])) != NULL) {
+
+						strRetIPAddress = string(pcharIPAddress);
 					}
 				}
 			}
 
-			return pcharMsg;
+			return strRetIPAddress;
 		}
 
 } csiOpInfo;
@@ -5365,7 +5520,7 @@ string MsgInfo::GetMsgString() {
 
 	if (pcharMsg != NULL) {
 	
-		strMsg = string(pcharMsg + nStartIndex);
+		strMsg = string(pcharMsg).substr(nStartIndex, nLength);
 	}
 
 	return strMsg;
@@ -5416,7 +5571,9 @@ int MsgInfo::GetEndIndex() {
 
 PeerToPeerClientInfo::PeerToPeerClientInfo(SOCKET socSetClient, 
 										   string strSetHomeIPAddress,
+										   int nSetHomePort,
 										   string strSetPeerIPAddress,  
+										   int nSetPeerPort,
 										   char* pcharSetEncryptKey, 
 										   char* pcharSetEncryptIV, 
 										   char* pcharSetDecryptKey, 
@@ -5430,6 +5587,8 @@ PeerToPeerClientInfo::PeerToPeerClientInfo(SOCKET socSetClient,
 	socClient = socSetClient;
 	strHomeIPAddress = strSetHomeIPAddress;
 	strPeerIPAddress = strSetPeerIPAddress;
+	nHomePort = nSetHomePort;
+	nPeerPort = nSetPeerPort;
 	pcharEncryptKey = pcharSetEncryptKey;
 	pcharEncryptIV = pcharSetEncryptIV;
 	pcharDecryptKey = pcharSetDecryptKey;
@@ -5461,11 +5620,19 @@ PeerToPeerClientInfo::PeerToPeerClientInfo(SOCKET socSetClient,
 		boolHasEncryptInfo = false;
 	}
 
-	if (strSetHomeIPAddress == "") {
+	if (strSetHomeIPAddress == "" || nHomePort <= 0) {
 	
 		if (getsockname(socSetClient, (SOCKADDR *)&saiConnectInfo, &nConnectInfoSize) == 0) {
 		
-			strHomeIPAddress = string(inet_ntoa(saiConnectInfo.sin_addr));
+			if (strSetHomeIPAddress == "") {
+
+				strHomeIPAddress = string(inet_ntoa(saiConnectInfo.sin_addr));
+			}
+
+			if (nHomePort <= 0) {
+			
+				nHomePort = ntohs(saiConnectInfo.sin_port);
+			}
 		}
 		else {
 
@@ -5473,11 +5640,19 @@ PeerToPeerClientInfo::PeerToPeerClientInfo(SOCKET socSetClient,
 		}
 	}
 
-	if (strSetPeerIPAddress == "") {
+	if (strSetPeerIPAddress == "" || nPeerPort <= 0) {
 	
 		if (getpeername(socSetClient, (SOCKADDR *)&saiConnectInfo, &nConnectInfoSize) == 0) {
-		
-			strPeerIPAddress = string(inet_ntoa(saiConnectInfo.sin_addr));
+
+			if (strPeerIPAddress == "") {
+
+				strPeerIPAddress = string(inet_ntoa(saiConnectInfo.sin_addr));
+			}
+
+			if (nPeerPort <= 0) {
+
+				nPeerPort = ntohs(saiConnectInfo.sin_port);
+			}
 		}
 		else {
 
@@ -5528,7 +5703,7 @@ void PeerToPeerClientInfo::Send(char* pcharMsg, int nMsgLen, bool boolTrack) {
 
 						if (!boolIsNegotiating && !boolIsANegotiation) {
 
-							csiOpInfo.AddLogErrorMsg("During running client 'Peer To Peer' message sender, sending messages failed. Error code: " + csiOpInfo.IntToString(nSendErrorCode));
+							csiOpInfo.AddLogErrorMsg("During running client 'Peer To Peer' message sender, sending messages failed. Error code: " + to_string(nSendErrorCode));
 						}
 
 						CloseClient();
@@ -5537,7 +5712,7 @@ void PeerToPeerClientInfo::Send(char* pcharMsg, int nMsgLen, bool boolTrack) {
 			}
 			else {
 
-				csiOpInfo.AddLogErrorMsg("During running client 'Peer To Peer' message sender, connecting to client failed. WSA error code: " + csiOpInfo.IntToString(WSAGetLastError()) + ".");
+				csiOpInfo.AddLogErrorMsg("During running client 'Peer To Peer' message sender, connecting to client failed. WSA error code: " + to_string(WSAGetLastError()) + ".");
 			}
 		}
 	}
@@ -5665,7 +5840,7 @@ int PeerToPeerClientInfo::Receive(char* pcharReturn) {
 
 											if (!boolIsNegotiating && !boolIsANegotiation) {
 
-												csiOpInfo.AddLogErrorMsg("During running client 'Peer To Peer' message receiver, sending replayed message, #" + to_string(pmsiSelect -> GetMetaDataSeqNum()) + ", failed for message type, '" + strMsgType + "'. Error code: " + csiOpInfo.IntToString(nSendErrorCode));
+												csiOpInfo.AddLogErrorMsg("During running client 'Peer To Peer' message receiver, sending replayed message, #" + to_string(pmsiSelect -> GetMetaDataSeqNum()) + ", failed for message type, '" + strMsgType + "'. Error code: " + to_string(nSendErrorCode));
 											}
 										}
 
@@ -5712,7 +5887,7 @@ int PeerToPeerClientInfo::Receive(char* pcharReturn) {
 				
 						if (!boolIsNegotiating && !boolIsANegotiation) {
 
-							csiOpInfo.AddLogErrorMsg("During running client 'Peer To Peer' message receiver, receiving message from client failed. WSA error code: " + csiOpInfo.IntToString(nSendErrorCode) + ".");
+							csiOpInfo.AddLogErrorMsg("During running client 'Peer To Peer' message receiver, receiving message from client failed. WSA error code: " + to_string(nSendErrorCode) + ".");
 						}
 
 						CloseClient();
@@ -5847,7 +6022,7 @@ int PeerToPeerClientInfo::Receive(char* pcharReturn) {
 			}
 			else {
 			
-				csiOpInfo.AddLogErrorMsg("During running client 'Peer To Peer' message receiver, connecting to client failed. WSA error code: " + csiOpInfo.IntToString(WSAGetLastError()) + ".");
+				csiOpInfo.AddLogErrorMsg("During running client 'Peer To Peer' message receiver, connecting to client failed. WSA error code: " + to_string(WSAGetLastError()) + ".");
 			}
 		}
 	}
@@ -6006,11 +6181,11 @@ void PeerToPeerClientInfo::SendReplay(bool boolIsNotCheck) {
 					
 					if (boolIsNotCheck) {
 
-						csiOpInfo.AddLogErrorMsg("During running client 'Peer To Peer' message receiver, sending replay message failed. Error code: " + csiOpInfo.IntToString(nSendErrorCode));
+						csiOpInfo.AddLogErrorMsg("During running client 'Peer To Peer' message receiver, sending replay message failed. Error code: " + to_string(nSendErrorCode));
 					}
 					else {
 					
-						csiOpInfo.AddLogErrorMsg("During running client 'Peer To Peer' message receiver, sending check message failed. Error code: " + csiOpInfo.IntToString(nSendErrorCode));
+						csiOpInfo.AddLogErrorMsg("During running client 'Peer To Peer' message receiver, sending check message failed. Error code: " + to_string(nSendErrorCode));
 					}
 				}
 
@@ -6541,6 +6716,11 @@ string PeerToPeerClientInfo::GetPeerIPAddress() {
 	return strPeerIPAddress;
 }
 
+int PeerToPeerClientInfo::GetPeerPort() {
+
+	return nPeerPort;
+}
+
 bool PeerToPeerClientInfo::Connected() {
 
 	return boolConnected;
@@ -7068,7 +7248,7 @@ bool StartPeerToPeerConnect(char* pcharHostName, int nPort) {
 
 		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
 	
-			boolSuccess = csiOpInfo.StartPeerToPeerConnect(string(pcharHostName), csiOpInfo.IntToString(nPort));			
+			boolSuccess = csiOpInfo.StartPeerToPeerConnect(string(pcharHostName), to_string(nPort));			
 		
 			if (!ReleaseMutex(hmuxLock)) {
 			
@@ -7103,7 +7283,7 @@ bool StartPeerToPeerConnectEncryptedWithKeys(char* pcharHostName, int nPort, cha
 			
 				if (csiOpInfo.ENCRYPTIVSIZE <= nEncryptIVSize) {
 
-					boolSuccess = csiOpInfo.StartPeerToPeerConnect(string(pcharHostName), csiOpInfo.IntToString(nPort), pcharEncryptKey, pcharEncryptIV);			
+					boolSuccess = csiOpInfo.StartPeerToPeerConnect(string(pcharHostName), to_string(nPort), pcharEncryptKey, pcharEncryptIV);			
 				}
 				else {
 			
@@ -7194,7 +7374,7 @@ void PeerToPeerCommunicate() {
 /* Starts Stream */
 void StartStream(int nNewTransID, char* pcharHostName, int nPort) {
 			
-	string astrParams[3] = { csiOpInfo.IntToString(nNewTransID), string(pcharHostName), csiOpInfo.IntToString(nPort) };
+	string astrParams[3] = { to_string(nNewTransID), string(pcharHostName), to_string(nPort) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -7205,30 +7385,30 @@ void StartStream(int nNewTransID, char* pcharHostName, int nPort) {
 
 			if (!csiOpInfo.AddSendMsg("STARTSTREAM", astrParams, 3)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'STARTSTREAM' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + " failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'STARTSTREAM' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + to_string(nPort) + " failed.");
 			}				
 		
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'STARTSTREAM' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + ", unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'STARTSTREAM' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + to_string(nPort) + ", unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'STARTSTREAM' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + ", locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'STARTSTREAM' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + to_string(nPort) + ", locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'STARTSTREAM' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + ", an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'STARTSTREAM' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + to_string(nPort) + ", an exception occurred.", exError.what(), true);
 	}
 }			
 		
 /* Starts Setup to Send Asynchronous HTTP POST Messages */
 void StartHTTPPostAsyncWithHostPort(int nNewTransID, char* pcharHostName, int nPort) {
 			
-	string astrParams[3] = { csiOpInfo.IntToString(nNewTransID), string(pcharHostName), csiOpInfo.IntToString(nPort) };
+	string astrParams[3] = { to_string(nNewTransID), string(pcharHostName), to_string(nPort) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -7239,30 +7419,30 @@ void StartHTTPPostAsyncWithHostPort(int nNewTransID, char* pcharHostName, int nP
 
 			if (!csiOpInfo.AddSendMsg("STARTHTTPPOSTASYNC", astrParams, 3)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTASYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + " failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTASYNC' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + to_string(nPort) + " failed.");
 			}			
 		
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTASYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + ", unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTASYNC' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + to_string(nPort) + ", unlocking thread failed.");
 			}		
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTASYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + ", locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTASYNC' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + to_string(nPort) + ", locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTASYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + ", an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTASYNC' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + to_string(nPort) + ", an exception occurred.", exError.what(), true);
 	}
 }			
 		
 /* Starts Setup to Send Asynchronous HTTP POST Messages Through Server Post 80 */
 void StartHTTPPostAsyncWithHost(int nNewTransID, char* pcharHostName) {
 			
-	string astrParams[2] = { csiOpInfo.IntToString(nNewTransID), string(pcharHostName) };
+	string astrParams[2] = { to_string(nNewTransID), string(pcharHostName) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -7273,30 +7453,30 @@ void StartHTTPPostAsyncWithHost(int nNewTransID, char* pcharHostName) {
 
 			if (!csiOpInfo.AddSendMsg("STARTHTTPPOSTASYNC", astrParams, 2)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTASYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "' and host: '" + string(pcharHostName) + "' failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTASYNC' with transaction ID: '" + to_string(nNewTransID) + "' and host: '" + string(pcharHostName) + "' failed.");
 			}				
 		
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTASYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "' and host: '" + string(pcharHostName) + "', unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTASYNC' with transaction ID: '" + to_string(nNewTransID) + "' and host: '" + string(pcharHostName) + "', unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTASYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "' and host: '" + string(pcharHostName) + "', locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTASYNC' with transaction ID: '" + to_string(nNewTransID) + "' and host: '" + string(pcharHostName) + "', locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTASYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTASYNC' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', an exception occurred.", exError.what(), true);
 	}
 }			
 		
 /* Starts Setup to Send Synchronous HTTP POST Messages */
 void StartHTTPPostSyncWithHostPort(int nNewTransID, char* pcharHostName, int nPort) {
 	
-	string astrParams[3] = { csiOpInfo.IntToString(nNewTransID), string(pcharHostName), csiOpInfo.IntToString(nPort) };
+	string astrParams[3] = { to_string(nNewTransID), string(pcharHostName), to_string(nPort) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -7307,30 +7487,30 @@ void StartHTTPPostSyncWithHostPort(int nNewTransID, char* pcharHostName, int nPo
 
 			if (!csiOpInfo.AddSendMsg("STARTHTTPPOSTSYNC", astrParams, 3)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTSYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + " failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTSYNC' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + to_string(nPort) + " failed.");
 			}			
 		
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTSYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + ", unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTSYNC' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + to_string(nPort) + ", unlocking thread failed.");
 			}		
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTSYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + ", locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTSYNC' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + to_string(nPort) + ", locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTSYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + ", an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTSYNC' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + to_string(nPort) + ", an exception occurred.", exError.what(), true);
 	}
 }	
 		
 /* Starts Setup to Send Synchronous HTTP POST Messages Through Server Post 80 */
 void StartHTTPPostSyncWithHost(int nNewTransID, char* pcharHostName) {
 			
-	string astrParams[2] = { csiOpInfo.IntToString(nNewTransID), string(pcharHostName) };
+	string astrParams[2] = { to_string(nNewTransID), string(pcharHostName) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -7341,30 +7521,30 @@ void StartHTTPPostSyncWithHost(int nNewTransID, char* pcharHostName) {
 
 			if (!csiOpInfo.AddSendMsg("STARTHTTPPOSTSYNC", astrParams, 2)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTSYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "' and host: '" + string(pcharHostName) + "' failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTSYNC' with transaction ID: '" + to_string(nNewTransID) + "' and host: '" + string(pcharHostName) + "' failed.");
 			}			
 		
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTSYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "' and host: '" + string(pcharHostName) + "', unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTSYNC' with transaction ID: '" + to_string(nNewTransID) + "' and host: '" + string(pcharHostName) + "', unlocking thread failed.");
 			}	
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTSYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "' and host: '" + string(pcharHostName) + "', locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTSYNC' with transaction ID: '" + to_string(nNewTransID) + "' and host: '" + string(pcharHostName) + "', locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTSYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPPOSTSYNC' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', an exception occurred.", exError.what(), true);
 	}
 }	
 		
 /* Starts Setup to Send Asynchronous HTTP GET Messages */
 void StartHTTPGetASyncWithHostPort(int nNewTransID, char* pcharHostName, int nPort) {
 
-	string astrParams[3] = { csiOpInfo.IntToString(nNewTransID), string(pcharHostName), csiOpInfo.IntToString(nPort) };
+	string astrParams[3] = { to_string(nNewTransID), string(pcharHostName), to_string(nPort) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -7375,30 +7555,30 @@ void StartHTTPGetASyncWithHostPort(int nNewTransID, char* pcharHostName, int nPo
 			
 			if (!csiOpInfo.AddSendMsg("STARTHTTPGETASYNC", astrParams, 3)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETASYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + " failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETASYNC' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + to_string(nPort) + " failed.");
 			}		
 		
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETASYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + ", unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETASYNC' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + to_string(nPort) + ", unlocking thread failed.");
 			}	
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETASYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + ", locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETASYNC' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + to_string(nPort) + ", locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETASYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + ", an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETASYNC' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + to_string(nPort) + ", an exception occurred.", exError.what(), true);
 	}
 }
 		
 /* Starts Setup to Send Asynchronous HTTP GET Messages Through Server Default Port */
 void StartHTTPGetASyncWithHost(int nNewTransID, char* pcharHostName) {
 
-	string astrParams[2] = { csiOpInfo.IntToString(nNewTransID), string(pcharHostName) };
+	string astrParams[2] = { to_string(nNewTransID), string(pcharHostName) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -7409,30 +7589,30 @@ void StartHTTPGetASyncWithHost(int nNewTransID, char* pcharHostName) {
 						
 			if (!csiOpInfo.AddSendMsg("STARTHTTPGETASYNC", astrParams, 2)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETASYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "' and host: '" + string(pcharHostName) + "'  failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETASYNC' with transaction ID: '" + to_string(nNewTransID) + "' and host: '" + string(pcharHostName) + "'  failed.");
 			}		
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETASYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "' and host: '" + string(pcharHostName) + ", locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETASYNC' with transaction ID: '" + to_string(nNewTransID) + "' and host: '" + string(pcharHostName) + ", locking thread failed.");
 		}		
 		
 		if (!ReleaseMutex(hmuxLock)) {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETASYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "' and host: '" + string(pcharHostName) + ", unlocking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETASYNC' with transaction ID: '" + to_string(nNewTransID) + "' and host: '" + string(pcharHostName) + ", unlocking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETASYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "' and host: '" + string(pcharHostName) + ", an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETASYNC' with transaction ID: '" + to_string(nNewTransID) + "' and host: '" + string(pcharHostName) + ", an exception occurred.", exError.what(), true);
 	}
 }
 		
 /* Starts Setup to Send Synchronous HTTP GET Messages */
 void StartHTTPGetSyncWithHostPort(int nNewTransID, char* pcharHostName, int nPort) {
 
-	string astrParams[3] = { csiOpInfo.IntToString(nNewTransID), string(pcharHostName), csiOpInfo.IntToString(nPort) };
+	string astrParams[3] = { to_string(nNewTransID), string(pcharHostName), to_string(nPort) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -7443,30 +7623,30 @@ void StartHTTPGetSyncWithHostPort(int nNewTransID, char* pcharHostName, int nPor
 			
 			if (!csiOpInfo.AddSendMsg("STARTHTTPGETSYNC", astrParams, 3)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETSYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + " failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETSYNC' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + to_string(nPort) + " failed.");
 			}			
 		
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETSYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + ", unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETSYNC' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + to_string(nPort) + ", unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETSYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + ", locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETSYNC' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + to_string(nPort) + ", locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETSYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + csiOpInfo.IntToString(nPort) + ", an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETSYNC' with transaction ID: '" + to_string(nNewTransID) + "', host: '" + string(pcharHostName) + "', port: " + to_string(nPort) + ", an exception occurred.", exError.what(), true);
 	}
 }
 		
 /* Starts Setup to Send Synchronous HTTP GET Messages Through Server Default Post */
 void StartHTTPGetSyncWithHost(int nNewTransID, char* pcharHostName) {
 
-	string astrParams[2] = { csiOpInfo.IntToString(nNewTransID), string(pcharHostName) };
+	string astrParams[2] = { to_string(nNewTransID), string(pcharHostName) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -7477,23 +7657,23 @@ void StartHTTPGetSyncWithHost(int nNewTransID, char* pcharHostName) {
 						
 			if (!csiOpInfo.AddSendMsg("STARTHTTPGETSYNC", astrParams, 2)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETSYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "' and host: '" + string(pcharHostName) + "' failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETSYNC' with transaction ID: '" + to_string(nNewTransID) + "' and host: '" + string(pcharHostName) + "' failed.");
 			}		
 		
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETSYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "' and host: '" + string(pcharHostName) + "', unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETSYNC' with transaction ID: '" + to_string(nNewTransID) + "' and host: '" + string(pcharHostName) + "', unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETSYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "' and host: '" + string(pcharHostName) + "', locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETSYNC' with transaction ID: '" + to_string(nNewTransID) + "' and host: '" + string(pcharHostName) + "', locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETSYNC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "' and host: '" + string(pcharHostName) + "', an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'STARTHTTPGETSYNC' with transaction ID: '" + to_string(nNewTransID) + "' and host: '" + string(pcharHostName) + "', an exception occurred.", exError.what(), true);
 	}
 }		
 		
@@ -7626,7 +7806,7 @@ void SendDirectMsgPeerToPeer(char* pcharMsg) {
 /* Adds to Queue of Messages to be Sent Through Stream (Will Not Store Messages That Have Stream Reserved Characters) */
 void AddStreamMsg(int nTransID, char* pcharMsg) {
 
-	string astrParams[2] = { csiOpInfo.IntToString(nTransID), string(pcharMsg) };
+	string astrParams[2] = { to_string(nTransID), string(pcharMsg) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -7637,30 +7817,30 @@ void AddStreamMsg(int nTransID, char* pcharMsg) {
 								
 			if (!csiOpInfo.AddSendMsg("ADDSTREAMMSG", astrParams, 2)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'ADDSTREAMMSG' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' and message: '" + string(pcharMsg) + "' failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'ADDSTREAMMSG' with transaction ID: '" + to_string(nTransID) + "' and message: '" + string(pcharMsg) + "' failed.");
 			}			
 		
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'ADDSTREAMMSG' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' and message: '" + string(pcharMsg) + "', unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'ADDSTREAMMSG' with transaction ID: '" + to_string(nTransID) + "' and message: '" + string(pcharMsg) + "', unlocking thread failed.");
 			}	
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'ADDSTREAMMSG' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' and message: '" + string(pcharMsg) + "', locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'ADDSTREAMMSG' with transaction ID: '" + to_string(nTransID) + "' and message: '" + string(pcharMsg) + "', locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'ADDSTREAMMSG' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' and message: '" + string(pcharMsg) + "', an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'ADDSTREAMMSG' with transaction ID: '" + to_string(nTransID) + "' and message: '" + string(pcharMsg) + "', an exception occurred.", exError.what(), true);
 	}
 }
 
 /* Registers Data Process */
 void RegisterDataProcess(int nNewTransID, char* pcharDataDesign) {
 			
-	string astrParams[2] = { csiOpInfo.IntToString(nNewTransID), string(pcharDataDesign) };
+	string astrParams[2] = { to_string(nNewTransID), string(pcharDataDesign) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -7671,30 +7851,30 @@ void RegisterDataProcess(int nNewTransID, char* pcharDataDesign) {
 
 			if (!csiOpInfo.AddSendMsg("REGDATAEXEC", astrParams, 2)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'REGDATAEXEC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', data designation: '" + string(pcharDataDesign) + "' failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'REGDATAEXEC' with transaction ID: '" + to_string(nNewTransID) + "', data designation: '" + string(pcharDataDesign) + "' failed.");
 			}			
 		
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'REGDATAEXEC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', data designation: '" + string(pcharDataDesign) + "', unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'REGDATAEXEC' with transaction ID: '" + to_string(nNewTransID) + "', data designation: '" + string(pcharDataDesign) + "', unlocking thread failed.");
 			}		
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'REGDATAEXEC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', data designation: '" + string(pcharDataDesign) + "', locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'REGDATAEXEC' with transaction ID: '" + to_string(nNewTransID) + "', data designation: '" + string(pcharDataDesign) + "', locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'REGDATAEXEC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', data designation: '" + string(pcharDataDesign) + "', an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'REGDATAEXEC' with transaction ID: '" + to_string(nNewTransID) + "', data designation: '" + string(pcharDataDesign) + "', an exception occurred.", exError.what(), true);
 	}
 }
 
 /* Registers Data Process with Parameters or Adds Params to Existing Data Process Transaction */
 void RegisterDataProcessWithParams(int nNewTransID, char* pcharDataDesign, char* pcharParamName, char* pcharParamValue) {
 			
-	string astrParams[4] = { csiOpInfo.IntToString(nNewTransID), string(pcharDataDesign), string(pcharParamName), string(pcharParamValue) };
+	string astrParams[4] = { to_string(nNewTransID), string(pcharDataDesign), string(pcharParamName), string(pcharParamValue) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -7705,30 +7885,30 @@ void RegisterDataProcessWithParams(int nNewTransID, char* pcharDataDesign, char*
 
 			if (!csiOpInfo.AddSendMsg("REGDATAEXEC", astrParams, 4)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'REGDATAEXEC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', data designation: '" + string(pcharDataDesign) + "', parameter name: '" + string(pcharParamName) + "', and value: '" + string(pcharParamValue) + "' failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'REGDATAEXEC' with transaction ID: '" + to_string(nNewTransID) + "', data designation: '" + string(pcharDataDesign) + "', parameter name: '" + string(pcharParamName) + "', and value: '" + string(pcharParamValue) + "' failed.");
 			}			
 		
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'REGDATAEXEC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', data designation: '" + string(pcharDataDesign) + "', parameter name: '" + string(pcharParamName) + "', and value: '" + string(pcharParamValue) + "', unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'REGDATAEXEC' with transaction ID: '" + to_string(nNewTransID) + "', data designation: '" + string(pcharDataDesign) + "', parameter name: '" + string(pcharParamName) + "', and value: '" + string(pcharParamValue) + "', unlocking thread failed.");
 			}		
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'REGDATAEXEC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', data designation: '" + string(pcharDataDesign) + "', parameter name: '" + string(pcharParamName) + "', and value: '" + string(pcharParamValue) + "', locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'REGDATAEXEC' with transaction ID: '" + to_string(nNewTransID) + "', data designation: '" + string(pcharDataDesign) + "', parameter name: '" + string(pcharParamName) + "', and value: '" + string(pcharParamValue) + "', locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'REGDATAEXEC' with transaction ID: '" + csiOpInfo.IntToString(nNewTransID) + "', data designation: '" + string(pcharDataDesign) + "', parameter name: '" + string(pcharParamName) + "', and value: '" + string(pcharParamValue) + "', an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'REGDATAEXEC' with transaction ID: '" + to_string(nNewTransID) + "', data designation: '" + string(pcharDataDesign) + "', parameter name: '" + string(pcharParamName) + "', and value: '" + string(pcharParamValue) + "', an exception occurred.", exError.what(), true);
 	}
 }
 
 /* Send Stored HTTP Message */
 void SendHTTP(int nTransID, int nNewRespID) {
 
-	string astrParams[2] = { csiOpInfo.IntToString(nTransID), csiOpInfo.IntToString(nNewRespID) };
+	string astrParams[2] = { to_string(nTransID), to_string(nNewRespID) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -7739,30 +7919,30 @@ void SendHTTP(int nTransID, int nNewRespID) {
 		
 			if (!csiOpInfo.AddSendMsg("SENDHTTP", astrParams, 2)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'SENDHTTP' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' with response ID: '" + csiOpInfo.IntToString(nNewRespID) + "' failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'SENDHTTP' with transaction ID: '" + to_string(nTransID) + "' with response ID: '" + to_string(nNewRespID) + "' failed.");
 			}		
 		
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'SENDHTTP' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' with response ID: '" + csiOpInfo.IntToString(nNewRespID) + "', unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'SENDHTTP' with transaction ID: '" + to_string(nTransID) + "' with response ID: '" + to_string(nNewRespID) + "', unlocking thread failed.");
 			}	
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'SENDHTTP' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' with response ID: '" + csiOpInfo.IntToString(nNewRespID) + "', locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'SENDHTTP' with transaction ID: '" + to_string(nTransID) + "' with response ID: '" + to_string(nNewRespID) + "', locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'SENDHTTP' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' with response ID: '" + csiOpInfo.IntToString(nNewRespID) + "', an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'SENDHTTP' with transaction ID: '" + to_string(nTransID) + "' with response ID: '" + to_string(nNewRespID) + "', an exception occurred.", exError.what(), true);
 	}
 }
 
 /* Send Data Process */
 void SendDataProcess(int nTransID, int nNewRespID, char* pcharDataDesign, bool boolAsync) {
 
-	string astrParams[4] = { csiOpInfo.IntToString(nTransID), csiOpInfo.IntToString(nNewRespID), string(pcharDataDesign), csiOpInfo.BoolToString(boolAsync) };
+	string astrParams[4] = { to_string(nTransID), to_string(nNewRespID), string(pcharDataDesign), csiOpInfo.BoolToString(boolAsync) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -7773,23 +7953,23 @@ void SendDataProcess(int nTransID, int nNewRespID, char* pcharDataDesign, bool b
 
 			if (!csiOpInfo.AddSendMsg("PROCESSDATAEXEC", astrParams, 4)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'PROCESSDATAEXEC' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' and response ID, '" + csiOpInfo.IntToString(nNewRespID) + "' failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'PROCESSDATAEXEC' with transaction ID: '" + to_string(nTransID) + "' and response ID, '" + to_string(nNewRespID) + "' failed.");
 			}			
 		
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'PROCESSDATAEXEC' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' and response ID, '" + csiOpInfo.IntToString(nNewRespID) + "', unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'PROCESSDATAEXEC' with transaction ID: '" + to_string(nTransID) + "' and response ID, '" + to_string(nNewRespID) + "', unlocking thread failed.");
 			}		
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'PROCESSDATAEXEC' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' and response ID, '" + csiOpInfo.IntToString(nNewRespID) + "', locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'PROCESSDATAEXEC' with transaction ID: '" + to_string(nTransID) + "' and response ID, '" + to_string(nNewRespID) + "', locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'PROCESSDATAEXEC' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' and response ID, '" + csiOpInfo.IntToString(nNewRespID) + "', an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'PROCESSDATAEXEC' with transaction ID: '" + to_string(nTransID) + "' and response ID, '" + to_string(nNewRespID) + "', an exception occurred.", exError.what(), true);
 	}
 } 
 
@@ -7799,46 +7979,26 @@ void GetHTTPResponse(int nTransID, int nRespID, char* pcharRetMsg, char* pcharRe
 	
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
-	string astrParams[2] = { csiOpInfo.IntToString(nTransID), csiOpInfo.IntToString(nRespID) };
+	string astrParams[2] = { to_string(nTransID), to_string(nRespID) };
 									/* Message Parameters */
-	MsgInfo* pmsiMsg = NULL,
-		   * pmsiPrevious = NULL;	/* Selected Message Information and Peviously Selected */
-	string strMsg = "";				/* Returned Message */
 
 	try {
 
 		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
-			
-			pmsiMsg = csiOpInfo.DequeueReceivedMsg("HTTPRESPONSE", astrParams, 2);
 
-			while (pmsiMsg != NULL) {
-			
-				strMsg += pmsiMsg -> GetMsgString();
-				pmsiPrevious = pmsiMsg;
-				pmsiMsg = pmsiMsg -> GetNextMsgInfo();
-
-				delete pmsiPrevious;
-				pmsiPrevious = NULL;
-			}
-
-			csiOpInfo.PrepStringOut(csiOpInfo.IntToString(csiOpInfo.PrepCharArrayOut(MsgInfo::FindSegmentInString(strMsg, 3), 
-																					 pcharRetMsg, 
-																					 MsgInfo::FindSegmentLengthInString(strMsg, 3),
-																					 atoi(pcharRetMsgLen))), 
-									pcharRetMsgLen, 
-									csiOpInfo.MSGLENSIZE);
+			csiOpInfo.PrepReturnMessagePart(csiOpInfo.GetDequeueReceivedMsg("HTTPRESPONSE", astrParams, 2), pcharRetMsg, pcharRetMsgLen, 3);
 		
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Processing message 'HTTPRESPONSE' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' and response ID: '" + 
-										 csiOpInfo.IntToString(nRespID) + "', unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Processing message 'HTTPRESPONSE' with transaction ID: '" + to_string(nTransID) + "' and response ID: '" + 
+										 to_string(nRespID) + "', unlocking thread failed.");
 			}
 		}
 		else {
 			
 			csiOpInfo.AddLogErrorMsg("Processing message 'HTTPRESPONSE' with transaction ID: '" + 
-									 csiOpInfo.IntToString(nTransID) + "' and response ID: '" + 
-									 csiOpInfo.IntToString(nRespID) + "', locking thread failed.");
+									 to_string(nTransID) + "' and response ID: '" + 
+									 to_string(nRespID) + "', locking thread failed.");
 			csiOpInfo.PrepStringOut("0", pcharRetMsgLen, csiOpInfo.MSGLENSIZE);
 		}
 	}
@@ -7846,10 +8006,50 @@ void GetHTTPResponse(int nTransID, int nRespID, char* pcharRetMsg, char* pcharRe
 		
 		ReleaseMutex(hmuxLock);
 		csiOpInfo.AddLogErrorMsg("Processing message 'HTTPRESPONSE' with transaction ID: '" + 
-								 csiOpInfo.IntToString(nTransID) + "' and response ID: '" + 
-								 csiOpInfo.IntToString(nRespID) + "', an exception occurred.", exError.what(), true);
+								 to_string(nTransID) + "' and response ID: '" + 
+								 to_string(nRespID) + "', an exception occurred.", exError.what(), true);
 		csiOpInfo.PrepStringOut("0", pcharRetMsgLen, csiOpInfo.MSGLENSIZE);
 	}
+}
+
+/* Gets Response Returned from Send Message, Before Deleting it from Response Queue and
+   Outputs Response Message as a String Indicated by the Response ID and Communication Transmission ID is Valid, Else Blank String */
+char* GetHTTPResponsePointer(int nTransID, int nRespID) {
+	
+	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
+									/* Locker for Thread */
+	string astrParams[2] = { to_string(nTransID), to_string(nRespID) };
+									/* Message Parameters */
+	char* pcharMsg = NULL;			/* Returned Message */
+
+	try {
+
+		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
+			
+			pcharMsg = MsgInfo::FindSegmentInString(csiOpInfo.GetDequeueReceivedMsg("HTTPRESPONSE", astrParams, 2), 3);
+		
+			if (!ReleaseMutex(hmuxLock)) {
+			
+				csiOpInfo.AddLogErrorMsg("Processing message 'HTTPRESPONSE' with transaction ID: '" + to_string(nTransID) + "' and response ID: '" + 
+										 to_string(nRespID) + "', unlocking thread failed.");
+			}
+		}
+		else {
+			
+			csiOpInfo.AddLogErrorMsg("Processing message 'HTTPRESPONSE' with transaction ID: '" + 
+									 to_string(nTransID) + "' and response ID: '" + 
+									 to_string(nRespID) + "', locking thread failed.");
+		}
+	}
+	catch (exception& exError) {
+		
+		ReleaseMutex(hmuxLock);
+		csiOpInfo.AddLogErrorMsg("Processing message 'HTTPRESPONSE' with transaction ID: '" + 
+								 to_string(nTransID) + "' and response ID: '" + 
+								 to_string(nRespID) + "', an exception occurred.", exError.what(), true);
+	}
+
+	return pcharMsg;
 }
 
 /* Checks If Gets Response Returned from Send Message, 
@@ -7858,7 +8058,7 @@ int CheckHTTPResponse(int nTransID, int nRespID) {
 	
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
-	string astrParams[2] = { csiOpInfo.IntToString(nTransID), csiOpInfo.IntToString(nRespID) };
+	string astrParams[2] = { to_string(nTransID), to_string(nRespID) };
 									/* Message Parameters */	
 	MsgInfo* pmsiMsg = NULL;		/* Selected Message Information and Peviously Selected */
 	string strMsg = "";				/* Returned Message */
@@ -7898,19 +8098,19 @@ int CheckHTTPResponse(int nTransID, int nRespID) {
 		
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Checking for message 'HTTPRESPONSE' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' and response ID: '" + 
-										 csiOpInfo.IntToString(nRespID) + "', unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Checking for message 'HTTPRESPONSE' with transaction ID: '" + to_string(nTransID) + "' and response ID: '" + 
+										 to_string(nRespID) + "', unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Checking for message 'HTTPRESPONSE' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Checking for message 'HTTPRESPONSE' with transaction ID: '" + to_string(nTransID) + "', locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Checking for message 'HTTPRESPONSE' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Checking for message 'HTTPRESPONSE' with transaction ID: '" + to_string(nTransID) + "', an exception occurred.", exError.what(), true);
 	}
 
 	return nRespLen;
@@ -7922,46 +8122,26 @@ void GetDataProcessResponse(int nTransID, int nRespID, char* pcharRetMsg, char* 
 	
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
-	string astrParams[2] = { csiOpInfo.IntToString(nTransID), csiOpInfo.IntToString(nRespID) };
+	string astrParams[2] = { to_string(nTransID), to_string(nRespID) };
 									/* Message Parameters */
-	MsgInfo* pmsiMsg = NULL,
-		   * pmsiPrevious = NULL;	/* Selected Message Information and Peviously Selected */
-	string strMsg = "";				/* Returned Message */
 
 	try {
 
 		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
 			
-			pmsiMsg = csiOpInfo.DequeueReceivedMsg("DATAEXECRETURN", astrParams, 2);
-
-			while (pmsiMsg != NULL) {
-			
-				strMsg += pmsiMsg -> GetMsgString();
-				pmsiPrevious = pmsiMsg;
-				pmsiMsg = pmsiMsg -> GetNextMsgInfo();
-
-				delete pmsiPrevious;
-				pmsiPrevious = NULL;
-			}
-
-			csiOpInfo.PrepStringOut(csiOpInfo.IntToString(csiOpInfo.PrepCharArrayOut(MsgInfo::FindSegmentInString(strMsg, 3), 
-																					 pcharRetMsg, 
-																					 MsgInfo::FindSegmentLengthInString(strMsg, 3),
-																					 atoi(pcharRetMsgLen))), 
-									pcharRetMsgLen, 
-									csiOpInfo.MSGLENSIZE);
+			csiOpInfo.PrepReturnMessagePart(csiOpInfo.GetDequeueReceivedMsg("DATAEXECRETURN", astrParams, 2), pcharRetMsg, pcharRetMsgLen, 3);
 		
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Processing message 'DATAEXECRETURN' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' and response ID: '" + 
-										 csiOpInfo.IntToString(nRespID) + "', unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Processing message 'DATAEXECRETURN' with transaction ID: '" + to_string(nTransID) + "' and response ID: '" + 
+										 to_string(nRespID) + "', unlocking thread failed.");
 			}
 		}
 		else {
 			
 			csiOpInfo.AddLogErrorMsg("Processing message 'DATAEXECRETURN' with transaction ID: '" + 
-									 csiOpInfo.IntToString(nTransID) + "' and response ID: '" + 
-									 csiOpInfo.IntToString(nRespID) + "', locking thread failed.");
+									 to_string(nTransID) + "' and response ID: '" + 
+									 to_string(nRespID) + "', locking thread failed.");
 			csiOpInfo.PrepStringOut("0", pcharRetMsgLen, csiOpInfo.MSGLENSIZE);
 		}
 	}
@@ -7969,10 +8149,50 @@ void GetDataProcessResponse(int nTransID, int nRespID, char* pcharRetMsg, char* 
 		
 		ReleaseMutex(hmuxLock);
 		csiOpInfo.AddLogErrorMsg("Processing message 'DATAEXECRETURN' with transaction ID: '" + 
-								 csiOpInfo.IntToString(nTransID) + "' and response ID: '" + 
-								 csiOpInfo.IntToString(nRespID) + "', an exception occurred.", exError.what(), true);
+								 to_string(nTransID) + "' and response ID: '" + 
+								 to_string(nRespID) + "', an exception occurred.", exError.what(), true);
 		csiOpInfo.PrepStringOut("0", pcharRetMsgLen, csiOpInfo.MSGLENSIZE);
 	}
+}
+
+/* Gets Response Returned from Send Message, Before Deleting it from Response Queue and
+   Outputs Response Message as a String Indicated by the Response ID and Communication Transmission ID is Valid, Else Blank String */
+char* GetDataProcessResponsePointer(int nTransID, int nRespID) {
+	
+	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
+									/* Locker for Thread */
+	string astrParams[2] = { to_string(nTransID), to_string(nRespID) };
+									/* Message Parameters */
+	char* pcharMag = NULL;			/* Returned Message */
+
+	try {
+
+		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
+			
+			pcharMag = MsgInfo::FindSegmentInString(csiOpInfo.GetDequeueReceivedMsg("DATAEXECRETURN", astrParams, 2), 3);
+		
+			if (!ReleaseMutex(hmuxLock)) {
+			
+				csiOpInfo.AddLogErrorMsg("Processing message 'DATAEXECRETURN' with transaction ID: '" + to_string(nTransID) + "' and response ID: '" + 
+										 to_string(nRespID) + "', unlocking thread failed.");
+			}
+		}
+		else {
+			
+			csiOpInfo.AddLogErrorMsg("Processing message 'DATAEXECRETURN' with transaction ID: '" + 
+									 to_string(nTransID) + "' and response ID: '" + 
+									 to_string(nRespID) + "', locking thread failed.");
+		}
+	}
+	catch (exception& exError) {
+		
+		ReleaseMutex(hmuxLock);
+		csiOpInfo.AddLogErrorMsg("Processing message 'DATAEXECRETURN' with transaction ID: '" + 
+								 to_string(nTransID) + "' and response ID: '" + 
+								 to_string(nRespID) + "', an exception occurred.", exError.what(), true);
+	}
+
+	return pcharMag;
 }
 
 /* Checks If Gets Response Returned from Data Process Return Message, 
@@ -7981,7 +8201,7 @@ int CheckDataProcessResponse(int nTransID, int nRespID) {
 	
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
-	string astrParams[2] = { csiOpInfo.IntToString(nTransID), csiOpInfo.IntToString(nRespID) };
+	string astrParams[2] = { to_string(nTransID), to_string(nRespID) };
 									/* Message Parameters */	
 	MsgInfo* pmsiMsg = NULL;		/* Selected Message Information and Peviously Selected */
 	string strMsg = "";				/* Returned Message */
@@ -8021,21 +8241,21 @@ int CheckDataProcessResponse(int nTransID, int nRespID) {
 		
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Checking for message 'DATAEXECRETURN' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' and response ID: '" + 
-										 csiOpInfo.IntToString(nRespID) + "', unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Checking for message 'DATAEXECRETURN' with transaction ID: '" + to_string(nTransID) + "' and response ID: '" + 
+										 to_string(nRespID) + "', unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Checking for message 'DATAEXECRETURN' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' and response ID: '" + 
-									 csiOpInfo.IntToString(nRespID) + "', locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Checking for message 'DATAEXECRETURN' with transaction ID: '" + to_string(nTransID) + "' and response ID: '" + 
+									 to_string(nRespID) + "', locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Checking for message 'DATAEXECRETURN' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' and response ID: '" + 
-								 csiOpInfo.IntToString(nRespID) + "', an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Checking for message 'DATAEXECRETURN' with transaction ID: '" + to_string(nTransID) + "' and response ID: '" + 
+								 to_string(nRespID) + "', an exception occurred.", exError.what(), true);
 	}
 
 	return nRespLen;
@@ -8048,41 +8268,16 @@ void GetStreamMsg(int nTransID, char* pcharRetMsg, char* pcharRetMsgLen) {
 	int nSegCount = 0;				/* Count of Message Segments */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
-	string astrParams[1] = { csiOpInfo.IntToString(nTransID) };
+	string astrParams[1] = { to_string(nTransID) };
 									/* Message Parameters */
-	MsgInfo* pmsiMsg = NULL,
-		   * pmsiPrevious = NULL;	/* Selected Message Information and Peviously Selected */
 	string strMsg = "";				/* Returned Message */
 
 	try {
 
 		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
 			
-			pmsiMsg = csiOpInfo.DequeueReceivedMsg("STREAMMSG", astrParams, 1);			
-
-			if (pmsiMsg != NULL) {
-
-				while (pmsiMsg != NULL) {
-			
-					strMsg += pmsiMsg -> GetMsgString();
-					pmsiPrevious = pmsiMsg;
-					pmsiMsg = pmsiMsg -> GetNextMsgInfo();
-
-					delete pmsiPrevious;
-					pmsiPrevious = NULL;
-				}
-
-				csiOpInfo.PrepStringOut(csiOpInfo.IntToString(csiOpInfo.PrepCharArrayOut(MsgInfo::FindSegmentInString(strMsg, 2), 
-																						 pcharRetMsg, 
-																						 MsgInfo::FindSegmentLengthInString(strMsg, 2),
-																						 atoi(pcharRetMsgLen))), 
-										pcharRetMsgLen, 
-										csiOpInfo.MSGLENSIZE);
-			}
-			else {
-						
-				csiOpInfo.PrepStringOut("0", pcharRetMsgLen, csiOpInfo.MSGLENSIZE);
-			}
+			strMsg = csiOpInfo.GetDequeueReceivedMsg("STREAMMSG", astrParams, 1);
+			csiOpInfo.PrepReturnMessagePart(strMsg, pcharRetMsg, pcharRetMsgLen, 2);
 		
 			if (!ReleaseMutex(hmuxLock)) {
 			
@@ -8103,6 +8298,43 @@ void GetStreamMsg(int nTransID, char* pcharRetMsg, char* pcharRetMsgLen) {
 	}
 }
 
+/* Gets a Waiting Message from Stream, Before Deleting it from the Wait Queue and
+   Outputs Message as a String If It Exists, Else Blank String */
+char* GetStreamMsgPointer(int nTransID) {
+	
+	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
+									/* Locker for Thread */
+	string astrParams[1] = { to_string(nTransID) };
+									/* Message Parameters */	
+	char* pcharMsg = NULL;			/* Pointer to Returned Message */
+	string strMsg = "";				/* Returned Message */
+
+	try {
+
+		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
+			
+			pcharMsg = MsgInfo::FindSegmentInString(csiOpInfo.GetDequeueReceivedMsg("STREAMMSG", astrParams, 1), 2);
+			strMsg = string(pcharMsg);
+		
+			if (!ReleaseMutex(hmuxLock)) {
+			
+				csiOpInfo.AddLogErrorMsg("During processing message 'STREAMMSG', message: '" + strMsg + "', unlocking thread failed.");
+			}
+		}
+		else {
+			
+			csiOpInfo.AddLogErrorMsg("During processing message 'STREAMMSG', message: '" + strMsg + "', locking thread failed.");
+		}
+	}
+	catch (exception& exError) {
+		
+		ReleaseMutex(hmuxLock);
+		csiOpInfo.AddLogErrorMsg("During processing message 'STREAMMSG', message: '" + strMsg + "', an exception occurred.", exError.what(), true);
+	}
+
+	return pcharMsg;
+}
+
 /* Gets Next Waiting Message from Any Stream, Before Deleting it from the Wait Queue and
    Outputs Message as a String If It Exists, Else Blank String */
 void GetStreamMsgNext(char* pcharRetMsg, char* pcharRetMsgLen) {
@@ -8118,31 +8350,7 @@ void GetStreamMsgNext(char* pcharRetMsg, char* pcharRetMsgLen) {
 
 		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
 
-			pmsiMsg = csiOpInfo.DequeueReceivedMsg("STREAMMSG");
-
-			if (pmsiMsg != NULL) {
-
-				while (pmsiMsg != NULL) {
-			
-					strMsg += pmsiMsg -> GetMsgString();
-					pmsiPrevious = pmsiMsg;
-					pmsiMsg = pmsiMsg -> GetNextMsgInfo();
-
-					delete pmsiPrevious;
-					pmsiPrevious = NULL;
-				}
-
-				csiOpInfo.PrepStringOut(csiOpInfo.IntToString(csiOpInfo.PrepCharArrayOut(MsgInfo::FindSegmentInString(strMsg, 2), 
-																						 pcharRetMsg, 
-																					     MsgInfo::FindSegmentLengthInString(strMsg, 2),
-																					     atoi(pcharRetMsgLen))), 
-										pcharRetMsgLen, 
-										csiOpInfo.MSGLENSIZE);
-			}
-			else {
-			
-				csiOpInfo.PrepStringOut("0", pcharRetMsgLen, csiOpInfo.MSGLENSIZE);
-			}
+			csiOpInfo.PrepReturnMessagePart(csiOpInfo.GetDequeueReceivedMsg("STREAMMSG"), pcharRetMsg, pcharRetMsgLen, 2);
 		
 			if (!ReleaseMutex(hmuxLock)) {
 			
@@ -8221,7 +8429,7 @@ int CheckStreamMsgReady() {
    Returns: Length of Stream Message Successfully, Else 0 */
 int CheckStreamMsgByIDReady(int nTransID) {
 
-	string astrParams[1] = { csiOpInfo.IntToString(nTransID) };
+	string astrParams[1] = { to_string(nTransID) };
 									/* Message Parameters */
 	int nMsgLen = 0;				/* Length of Message */	
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
@@ -8256,18 +8464,18 @@ int CheckStreamMsgByIDReady(int nTransID) {
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("During finding if a stream messsage, by transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', exists, unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("During finding if a stream messsage, by transaction ID: '" + to_string(nTransID) + "', exists, unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("During finding if a stream messsage, by transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', exists, locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("During finding if a stream messsage, by transaction ID: '" + to_string(nTransID) + "', exists, locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("During finding if a stream messsage, by transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', exists, an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("During finding if a stream messsage, by transaction ID: '" + to_string(nTransID) + "', exists, an exception occurred.", exError.what(), true);
 	}
 
 	return nMsgLen;
@@ -8310,7 +8518,7 @@ bool ClearStreamMsgs() {
    Outputs True If Deletion Successful, Else False */
 bool ClearStreamMsgsByIDReady(int nTransID) {
 
-	string astrParams[1] = { csiOpInfo.IntToString(nTransID) };
+	string astrParams[1] = { to_string(nTransID) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */	
@@ -8324,18 +8532,18 @@ bool ClearStreamMsgsByIDReady(int nTransID) {
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Clearing messages: 'STREAMMSG', by transaction ID: " + csiOpInfo.IntToString(nTransID) + ", unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Clearing messages: 'STREAMMSG', by transaction ID: " + to_string(nTransID) + ", unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Clearing messages: 'STREAMMSG', by transaction ID: " + csiOpInfo.IntToString(nTransID) + ", locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Clearing messages: 'STREAMMSG', by transaction ID: " + to_string(nTransID) + ", locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Clearing messages: 'STREAMMSG', by transaction ID: " + csiOpInfo.IntToString(nTransID) + ", an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Clearing messages: 'STREAMMSG', by transaction ID: " + to_string(nTransID) + ", an exception occurred.", exError.what(), true);
 	}
 
 	return boolSuccess;
@@ -8465,7 +8673,7 @@ bool CheckStreamFileDownload(char* pcharFileDesign, char* pcharRetFilePath, int 
 						else {
 						
 							csiOpInfo.AddLogErrorMsg("During parsing message 'STREAMFILE' with file designation: '" + string(pcharFileDesign) + 
-													 "', only " + csiOpInfo.IntToString(nCurrentLen) + " of " + csiOpInfo.IntToString(nFileLen) + 
+													 "', only " + to_string(nCurrentLen) + " of " + to_string(nFileLen) + 
 													 " file size was found. File will be removed from stream as failure.");
 							csiOpInfo.ClearFile(astrParams, 1);
 						}
@@ -8629,12 +8837,7 @@ void GetStreamFileList(char* pcharRetMsg, char* pcharRetMsgLen) {
 					}
 				}
 
-				csiOpInfo.PrepStringOut(csiOpInfo.IntToString(csiOpInfo.PrepCharArrayOut(MsgInfo::FindSegmentInString(strMsg, 1), 
-																						 pcharRetMsg, 
-																						 MsgInfo::FindSegmentLengthInString(strMsg, 1),
-																						 atoi(pcharRetMsgLen))), 
-										pcharRetMsgLen, 
-										csiOpInfo.MSGLENSIZE);
+				csiOpInfo.PrepReturnMessagePart(strMsg, pcharRetMsg, pcharRetMsgLen, 1);
 			}
 
 			if (!ReleaseMutex(hmuxLock)) {
@@ -8664,35 +8867,12 @@ void GetDirectMsg(char* pcharDesign, char* pcharRetMsg, char* pcharRetMsgLen) {
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */	
-	MsgInfo* pmsiMsg = NULL,
-		   * pmsiPrevious = NULL;	/* Selected Message Information and Peviously Selected */
-	string strMsg = "";				/* Returned Message */
 
 	try {
 
 		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
 			
-			pmsiMsg = csiOpInfo.DequeueReceivedMsg("DIRECTMSG", astrParams, 1);	
-
-			if (pmsiMsg != NULL) {
-
-				while (pmsiMsg != NULL) {
-			
-					strMsg += pmsiMsg -> GetMsgString();
-					pmsiPrevious = pmsiMsg;
-					pmsiMsg = pmsiMsg -> GetNextMsgInfo();
-
-					delete pmsiPrevious;
-					pmsiPrevious = NULL;
-				}
-
-				csiOpInfo.PrepStringOut(csiOpInfo.IntToString(csiOpInfo.PrepCharArrayOut(MsgInfo::FindSegmentInString(strMsg, 2), 
-																						 pcharRetMsg, 
-																						 MsgInfo::FindSegmentLengthInString(strMsg, 2),
-																						 atoi(pcharRetMsgLen))), 
-										pcharRetMsgLen, 
-										csiOpInfo.MSGLENSIZE);
-			}
+			csiOpInfo.PrepReturnMessagePart(csiOpInfo.GetDequeueReceivedMsg("DIRECTMSG", astrParams, 1), pcharRetMsg, pcharRetMsgLen, 2);
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
@@ -8713,45 +8893,53 @@ void GetDirectMsg(char* pcharDesign, char* pcharRetMsg, char* pcharRetMsgLen) {
 	}
 }
 
+/* Gets Specific Direct Message, Before Deleting it from the Wait Queue and
+   Outputs Message as a String If It Exists, Else Blank String */
+char* GetDirectMsgPointer(char* pcharDesign) {
+	
+	string astrParams[1] = { string(pcharDesign) };
+									/* Message Parameters */
+	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
+									/* Locker for Thread */	
+	char* pcharMsg = NULL;			/* Return Message */
+
+	try {
+
+		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
+			
+			pcharMsg = MsgInfo::FindSegmentInString(csiOpInfo.GetDequeueReceivedMsg("DIRECTMSG", astrParams, 1), 2);
+
+			if (!ReleaseMutex(hmuxLock)) {
+			
+				csiOpInfo.AddLogErrorMsg("During processing next message: 'DIRECTMSG', unlocking thread failed.");
+			}
+		}
+		else {
+			
+			csiOpInfo.AddLogErrorMsg("During processing next message: 'DIRECTMSG', locking thread failed.");
+		}
+	}
+	catch (exception& exError) {
+		
+		ReleaseMutex(hmuxLock);
+		csiOpInfo.AddLogErrorMsg("During processing next message: 'DIRECTMSG', an exception occurred.", exError.what(), true);
+	}
+
+	return pcharMsg;
+}
+
 /* Gets Next Direct Message, Before Deleting it from the Wait Queue and
    Outputs Message as a String If It Exists, Else Blank String */
 void GetDirectMsgNext(char* pcharRetMsg, char* pcharRetMsgLen) {
 	
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */	
-	MsgInfo* pmsiMsg = NULL,
-		   * pmsiPrevious = NULL;	/* Selected Message Information and Peviously Selected */
-	string strMsg = "";				/* Returned Message */
 
 	try {
 
 		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
 			
-			pmsiMsg = csiOpInfo.DequeueReceivedMsg("DIRECTMSG");	
-
-			if (pmsiMsg != NULL) {
-
-				while (pmsiMsg != NULL) {
-			
-					strMsg += pmsiMsg -> GetMsgString();
-					pmsiPrevious = pmsiMsg;
-					pmsiMsg = pmsiMsg -> GetNextMsgInfo();
-
-					delete pmsiPrevious;
-					pmsiPrevious = NULL;
-				}
-
-				csiOpInfo.PrepStringOut(csiOpInfo.IntToString(csiOpInfo.PrepCharArrayOut(MsgInfo::FindSegmentInString(strMsg, 2), 
-																						 pcharRetMsg, 
-																						 MsgInfo::FindSegmentLengthInString(strMsg, 2),
-																						 atoi(pcharRetMsgLen))), 
-										pcharRetMsgLen, 
-										csiOpInfo.MSGLENSIZE);
-			}
-			else {
-			
-				csiOpInfo.PrepStringOut("0", pcharRetMsgLen, csiOpInfo.MSGLENSIZE);
-			}
+			csiOpInfo.PrepReturnMessagePart(csiOpInfo.GetDequeueReceivedMsg("DIRECTMSG"), pcharRetMsg, pcharRetMsgLen, 2);
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
@@ -8769,6 +8957,39 @@ void GetDirectMsgNext(char* pcharRetMsg, char* pcharRetMsgLen) {
 		csiOpInfo.AddLogErrorMsg("During processing next message: 'DIRECTMSG', an exception occurred.", exError.what(), true);
 		csiOpInfo.PrepStringOut("0", pcharRetMsgLen, csiOpInfo.MSGLENSIZE);
 	}
+}
+
+/* Gets Next Direct Message, Before Deleting it from the Wait Queue and
+   Outputs Message as a String If It Exists, Else Blank String */
+char* GetDirectMsgNextPointer() {
+	
+	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
+									/* Locker for Thread */	
+	char* pcharMsg = NULL;			/* Returned Message */
+
+	try {
+
+		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
+			
+			 pcharMsg = MsgInfo::FindSegmentInString(csiOpInfo.GetDequeueReceivedMsg("DIRECTMSG"), 2);
+
+			if (!ReleaseMutex(hmuxLock)) {
+			
+				csiOpInfo.AddLogErrorMsg("During processing next message: 'DIRECTMSG', unlocking thread failed.");
+			}
+		}
+		else {
+			
+			csiOpInfo.AddLogErrorMsg("During processing next message: 'DIRECTMSG', locking thread failed.");
+		}
+	}
+	catch (exception& exError) {
+		
+		ReleaseMutex(hmuxLock);
+		csiOpInfo.AddLogErrorMsg("During processing next message: 'DIRECTMSG', an exception occurred.", exError.what(), true);
+	}
+
+	return pcharMsg;
 }
 
 /* Gets If Direct Message is Ready
@@ -8954,7 +9175,7 @@ bool ClearDirectMsgsWithDesign(char* pcharDesign) {
 /* Sets Processing Page for HTTP POST and GET Transmissions */
 void SetHTTPProcessPage(int nTransID, char* pcharProcessPathPage) {
 
-	string astrParams[2] = { csiOpInfo.IntToString(nTransID), string(pcharProcessPathPage) };
+	string astrParams[2] = { to_string(nTransID), string(pcharProcessPathPage) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -8965,30 +9186,30 @@ void SetHTTPProcessPage(int nTransID, char* pcharProcessPathPage) {
 				
 			if (!csiOpInfo.AddSendMsg("SETHTTPPROCESSPAGE", astrParams, 2)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'SETHTTPPROCESSPAGE' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' and HTTP processing page: '" + string(pcharProcessPathPage) + "' failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'SETHTTPPROCESSPAGE' with transaction ID: '" + to_string(nTransID) + "' and HTTP processing page: '" + string(pcharProcessPathPage) + "' failed.");
 			}
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'SETHTTPPROCESSPAGE' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' and HTTP processing page: '" + string(pcharProcessPathPage) + "', unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'SETHTTPPROCESSPAGE' with transaction ID: '" + to_string(nTransID) + "' and HTTP processing page: '" + string(pcharProcessPathPage) + "', unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'SETHTTPPROCESSPAGE' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' and HTTP processing page: '" + string(pcharProcessPathPage) + "', locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'SETHTTPPROCESSPAGE' with transaction ID: '" + to_string(nTransID) + "' and HTTP processing page: '" + string(pcharProcessPathPage) + "', locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'SETHTTPPROCESSPAGE' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' and HTTP processing page: '" + string(pcharProcessPathPage) + "', an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'SETHTTPPROCESSPAGE' with transaction ID: '" + to_string(nTransID) + "' and HTTP processing page: '" + string(pcharProcessPathPage) + "', an exception occurred.", exError.what(), true);
 	}
 }
 
 /* Adds a Variable and its Value to the Next Message Being Sent Through HTTP Transmission */
 void AddHTTPMsgData(int nTransID, char* pcharVarName, char* pcharValue) {
 	
-	string astrParams[3] = { csiOpInfo.IntToString(nTransID), string(pcharVarName), string(pcharValue) };
+	string astrParams[3] = { to_string(nTransID), string(pcharVarName), string(pcharValue) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -8999,30 +9220,30 @@ void AddHTTPMsgData(int nTransID, char* pcharVarName, char* pcharValue) {
 				
 			if (!csiOpInfo.AddSendMsg("ADDHTTPMSGDATA", astrParams, 3)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'ADDHTTPMSGDATA' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', variable name: '" + string(pcharVarName) + "', variable value: '" + string(pcharValue) + "' failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'ADDHTTPMSGDATA' with transaction ID: '" + to_string(nTransID) + "', variable name: '" + string(pcharVarName) + "', variable value: '" + string(pcharValue) + "' failed.");
 			}
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'ADDHTTPMSGDATA' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', variable name: '" + string(pcharVarName) + "', variable value: '" + string(pcharValue) + "', unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'ADDHTTPMSGDATA' with transaction ID: '" + to_string(nTransID) + "', variable name: '" + string(pcharVarName) + "', variable value: '" + string(pcharValue) + "', unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'ADDHTTPMSGDATA' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', variable name: '" + string(pcharVarName) + "', variable value: '" + string(pcharValue) + "', locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'ADDHTTPMSGDATA' with transaction ID: '" + to_string(nTransID) + "', variable name: '" + string(pcharVarName) + "', variable value: '" + string(pcharValue) + "', locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'ADDHTTPMSGDATA' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', variable name: '" + string(pcharVarName) + "', variable value: '" + string(pcharValue) + "', an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'ADDHTTPMSGDATA' with transaction ID: '" + to_string(nTransID) + "', variable name: '" + string(pcharVarName) + "', variable value: '" + string(pcharValue) + "', an exception occurred.", exError.what(), true);
 	}
 }        
 		
 /* Clears Next Message Being Sent Through HTTP Transmission */
 void ClearHTTPMsgData(int nTransID) {
 
-	string astrParams[1] = { csiOpInfo.IntToString(nTransID) };
+	string astrParams[1] = { to_string(nTransID) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -9033,30 +9254,30 @@ void ClearHTTPMsgData(int nTransID) {
 
 			if (!csiOpInfo.AddSendMsg("CLEARHTTPMSGDATA", astrParams, 1)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'CLEARHTTPMSGDATA' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'CLEARHTTPMSGDATA' with transaction ID: '" + to_string(nTransID) + "' failed.");
 			}
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'CLEARHTTPMSGDATA' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'CLEARHTTPMSGDATA' with transaction ID: '" + to_string(nTransID) + "', unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'CLEARHTTPMSGDATA' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'CLEARHTTPMSGDATA' with transaction ID: '" + to_string(nTransID) + "', locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'CLEARHTTPMSGDATA' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'CLEARHTTPMSGDATA' with transaction ID: '" + to_string(nTransID) + "', an exception occurred.", exError.what(), true);
 	}
 }
 		
 /* Send Message to Use SSL for an HTTP Transmission */
 void UseHTTPSSL(int nTransID, bool boolUseSSL) {
 
-	string astrParams[2] = { csiOpInfo.IntToString(nTransID), csiOpInfo.BoolToString(boolUseSSL) };
+	string astrParams[2] = { to_string(nTransID), csiOpInfo.BoolToString(boolUseSSL) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -9067,30 +9288,30 @@ void UseHTTPSSL(int nTransID, bool boolUseSSL) {
 
 			if (!csiOpInfo.AddSendMsg("USESSL", astrParams, 2)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'USESSL' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'USESSL' with transaction ID: '" + to_string(nTransID) + "' failed.");
 			}
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'USESSL' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'USESSL' with transaction ID: '" + to_string(nTransID) + "', unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'USESSL' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'USESSL' with transaction ID: '" + to_string(nTransID) + "', locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'USESSL' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'USESSL' with transaction ID: '" + to_string(nTransID) + "', an exception occurred.", exError.what(), true);
 	}
 }
 
 /* Closes Specified Transmission */
 void Close(int nTransID) {
 	
-	string astrParams[1] = { csiOpInfo.IntToString(nTransID) };
+	string astrParams[1] = { to_string(nTransID) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -9101,23 +9322,23 @@ void Close(int nTransID) {
 	
 			if (!csiOpInfo.AddSendMsg("CLOSE", astrParams, 1)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'CLOSE' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'CLOSE' with transaction ID: '" + to_string(nTransID) + "' failed.");
 			}
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'CLOSE' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'CLOSE' with transaction ID: '" + to_string(nTransID) + "', unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'CLOSE' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'CLOSE' with transaction ID: '" + to_string(nTransID) + "', locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'CLOSE' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'CLOSE' with transaction ID: '" + to_string(nTransID) + "', an exception occurred.", exError.what(), true);
 	}
 }
 
@@ -9128,44 +9349,20 @@ void GetLogError(char* pcharRetMsg, char* pcharRetMsgLen) {
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
 	string astrParams[1] = {""};	/* Message Parameters */
-	MsgInfo* pmsiMsg = NULL,		
-		   * pmsiPrevious = NULL;	/* Selected Message Information and Peviously Selected */
 	string strMsg = "";				/* Returned Message */
 
 	try {
 
 		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
 
-			pmsiMsg = csiOpInfo.DequeueStoredMsg("LOGERRORMSG", astrParams, 0);
+			strMsg = csiOpInfo.GetDequeueStoredMsg("LOGERRORMSG", astrParams, 0);
 			
-			if (pmsiMsg == NULL) {
+			if (strMsg == "") {
 						
-				pmsiMsg = csiOpInfo.DequeueReceivedMsg("LOGERRORMSG");
+				strMsg = csiOpInfo.GetDequeueReceivedMsg("LOGERRORMSG");
 			}
 
-			if (pmsiMsg != NULL) {
-
-				while (pmsiMsg != NULL) {
-			
-					strMsg += pmsiMsg -> GetMsgString();
-					pmsiPrevious = pmsiMsg;
-					pmsiMsg = pmsiMsg -> GetNextMsgInfo();
-
-					delete pmsiPrevious;
-					pmsiPrevious = NULL;
-				}
-
-				csiOpInfo.PrepStringOut(csiOpInfo.IntToString(csiOpInfo.PrepCharArrayOut(MsgInfo::FindSegmentInString(strMsg, 1), 
-																						 pcharRetMsg, 
-																						 MsgInfo::FindSegmentLengthInString(strMsg, 1),
-																						 atoi(pcharRetMsgLen))), 
-										pcharRetMsgLen, 
-										csiOpInfo.MSGLENSIZE);
-			}
-			else {
-				
-				csiOpInfo.PrepStringOut("0", pcharRetMsgLen, csiOpInfo.MSGLENSIZE);
-			}
+			csiOpInfo.PrepReturnMessagePart(strMsg, pcharRetMsg, pcharRetMsgLen, 1);
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
@@ -9186,6 +9383,48 @@ void GetLogError(char* pcharRetMsg, char* pcharRetMsgLen) {
 	}
 }
 
+/* Gets Log Error Message Before Clearing its Information and
+   Outputs Error Message as a String If It Exists, Else Blank String */
+char* GetLogErrorPointer() {
+
+	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
+									/* Locker for Thread */
+	string astrParams[1] = {""};	/* Message Parameters */
+	string strMsg = "";				/* Returned Message */
+	char* pcharMsg = NULL;			/* Pointer to Returned Message */
+
+	try {
+
+		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
+
+			strMsg = csiOpInfo.GetDequeueStoredMsg("LOGERRORMSG", astrParams, 0);
+			
+			if (strMsg == "") {
+						
+				strMsg = csiOpInfo.GetDequeueReceivedMsg("LOGERRORMSG");
+			}
+
+			pcharMsg = MsgInfo::FindSegmentInString(strMsg, 1);
+
+			if (!ReleaseMutex(hmuxLock)) {
+			
+				csiOpInfo.AddLogErrorMsg("During processing log error message', message: '" + strMsg + "', unlocking thread failed.");
+			}
+		}
+		else {
+			
+			csiOpInfo.AddLogErrorMsg("During processing log error message, message: '" + strMsg + "', locking thread failed.");
+		}
+	}
+	catch (exception& exError) {
+		
+		ReleaseMutex(hmuxLock);
+		csiOpInfo.AddLogErrorMsg("During processing log error message, message: '" + strMsg + "', an exception occurred.", exError.what(), true);
+	}
+
+	return pcharMsg;
+}
+
 /* Gets Log Error Message Before Clearing its Information and 
    Outputs Error Message as a String If It Exists, Else Blank String */
 void GetDisplayError(char* pcharRetMsg, char* pcharRetMsgLen) {
@@ -9193,44 +9432,20 @@ void GetDisplayError(char* pcharRetMsg, char* pcharRetMsgLen) {
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
 	string astrParams[1] = {""};	/* Message Parameters */
-	MsgInfo* pmsiMsg = NULL,		
-		   * pmsiPrevious = NULL;	/* Selected Message Information and Peviously Selected */
 	string strMsg = "";				/* Returned Message */
 
 	try {
 
 		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
 			
-			pmsiMsg = csiOpInfo.DequeueStoredMsg("DISPLAYERRORMSG", astrParams, 0);
+			strMsg = csiOpInfo.GetDequeueStoredMsg("DISPLAYERRORMSG", astrParams, 0);
 
-			if (pmsiMsg == NULL) {
+			if (strMsg == "") {
 						
-				pmsiMsg = csiOpInfo.DequeueReceivedMsg("DISPLAYERRORMSG");
+				strMsg = csiOpInfo.GetDequeueReceivedMsg("DISPLAYERRORMSG");
 			}
 
-			if (pmsiMsg != NULL) {
-
-				while (pmsiMsg != NULL) {
-			
-					strMsg += pmsiMsg -> GetMsgString();
-					pmsiPrevious = pmsiMsg;
-					pmsiMsg = pmsiMsg -> GetNextMsgInfo();
-
-					delete pmsiPrevious;
-					pmsiPrevious = NULL;
-				}
-
-				csiOpInfo.PrepStringOut(csiOpInfo.IntToString(csiOpInfo.PrepCharArrayOut(MsgInfo::FindSegmentInString(strMsg, 1), 
-																						 pcharRetMsg, 
-																						 MsgInfo::FindSegmentLengthInString(strMsg, 1),
-																						 atoi(pcharRetMsgLen))), 
-										pcharRetMsgLen, 
-										csiOpInfo.MSGLENSIZE);
-			}
-			else {
-			
-				csiOpInfo.PrepStringOut("0", pcharRetMsgLen, csiOpInfo.MSGLENSIZE);
-			}
+			csiOpInfo.PrepReturnMessagePart(strMsg, pcharRetMsg, pcharRetMsgLen, 1);
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
@@ -9249,12 +9464,53 @@ void GetDisplayError(char* pcharRetMsg, char* pcharRetMsgLen) {
 		csiOpInfo.AddLogErrorMsg("During processing display error message, message: '" + strMsg + "', an exception occurred.", exError.what(), true);
 		csiOpInfo.PrepStringOut("0", pcharRetMsgLen, csiOpInfo.MSGLENSIZE);
 	}
+
+}/* Gets Log Error Message Before Clearing its Information and 
+    Outputs Error Message as a String If It Exists, Else Blank String */
+char* GetDisplayErrorPointer() {
+
+	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
+									/* Locker for Thread */
+	string astrParams[1] = { "" };	/* Message Parameters */
+	string strMsg = "";				/* Returned Message */
+	char* pcharMsg = NULL;			/* Pointer to Returned Message */
+
+	try {
+
+		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
+
+			strMsg = csiOpInfo.GetDequeueStoredMsg("DISPLAYERRORMSG", astrParams, 0);
+
+			if (strMsg == "") {
+
+				strMsg = csiOpInfo.GetDequeueReceivedMsg("DISPLAYERRORMSG");
+			}
+
+			pcharMsg = MsgInfo::FindSegmentInString(strMsg, 1);
+
+			if (!ReleaseMutex(hmuxLock)) {
+
+				csiOpInfo.AddLogErrorMsg("During processing display error message, message: '" + strMsg + "', unlocking thread failed.");
+			}
+		}
+		else {
+
+			csiOpInfo.AddLogErrorMsg("During processing display error message, message: '" + strMsg + "', locking thread failed.");
+		}
+	}
+	catch (exception& exError) {
+
+		ReleaseMutex(hmuxLock);
+		csiOpInfo.AddLogErrorMsg("During processing display error message, message: '" + strMsg + "', an exception occurred.", exError.what(), true);
+	}
+
+	return pcharMsg;
 }
 
 /* Sets Message Part Character for Stream (Defaults to '!*+#') */
 void SetStreamMsgSeparator(int nTransID, char* pcharStreamMsgSeparator) {
 
-	string astrParams[2] = { csiOpInfo.IntToString(nTransID), string(pcharStreamMsgSeparator) };
+	string astrParams[2] = { to_string(nTransID), string(pcharStreamMsgSeparator) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -9265,30 +9521,30 @@ void SetStreamMsgSeparator(int nTransID, char* pcharStreamMsgSeparator) {
 	
 			if (!csiOpInfo.AddSendMsg("SETSTREAMMSGSEPARATOR", astrParams, 2)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGSEPARATOR' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGSEPARATOR' with transaction ID: '" + to_string(nTransID) + "' failed.");
 			}
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGSEPARATOR' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGSEPARATOR' with transaction ID: '" + to_string(nTransID) + "', unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGSEPARATOR' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGSEPARATOR' with transaction ID: '" + to_string(nTransID) + "', locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGSEPARATOR' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGSEPARATOR' with transaction ID: '" + to_string(nTransID) + "', an exception occurred.", exError.what(), true);
 	}
 }
 
 /* Sets Message Start Character for Stream (Defaults to '%-&>') */
 void SetStreamMsgStart(int nTransID, char* pcharStreamMsgStart) {
 
-	string astrParams[2] = { csiOpInfo.IntToString(nTransID), string(pcharStreamMsgStart) };
+	string astrParams[2] = { to_string(nTransID), string(pcharStreamMsgStart) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -9299,30 +9555,30 @@ void SetStreamMsgStart(int nTransID, char* pcharStreamMsgStart) {
 	
 			if (!csiOpInfo.AddSendMsg("SETSTREAMMSGSTART", astrParams, 2)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGSTART' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGSTART' with transaction ID: '" + to_string(nTransID) + "' failed.");
 			}
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGSTART' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGSTART' with transaction ID: '" + to_string(nTransID) + "', unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGSTART' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGSTART' with transaction ID: '" + to_string(nTransID) + "', locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGSTART' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGSTART' with transaction ID: '" + to_string(nTransID) + "', an exception occurred.", exError.what(), true);
 	}
 }
 
 /* Sets Message End Character for Stream (Defaults to '<@^$') */
 void SetStreamMsgEnd(int nTransID, char* pcharStreamMsgEnd) {
 
-	string astrParams[2] = { csiOpInfo.IntToString(nTransID), string(pcharStreamMsgEnd) };
+	string astrParams[2] = { to_string(nTransID), string(pcharStreamMsgEnd) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -9333,30 +9589,30 @@ void SetStreamMsgEnd(int nTransID, char* pcharStreamMsgEnd) {
 	
 			if (!csiOpInfo.AddSendMsg("SETSTREAMMSGEND", astrParams, 2)) {
 	
-				csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGEND' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGEND' with transaction ID: '" + to_string(nTransID) + "' failed.");
 			}
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGEND' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGEND' with transaction ID: '" + to_string(nTransID) + "', unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGEND' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGEND' with transaction ID: '" + to_string(nTransID) + "', locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGEND' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGEND' with transaction ID: '" + to_string(nTransID) + "', an exception occurred.", exError.what(), true);
 	}
 }
 
 /* Sets Message Filler Character for Stream (Defaults to '\0') */
 void SetStreamMsgFiller(int nTransID, char* pcharStreamMsgFiller) {
 
-	string astrParams[2] = { csiOpInfo.IntToString(nTransID), string(pcharStreamMsgFiller) };
+	string astrParams[2] = { to_string(nTransID), string(pcharStreamMsgFiller) };
 									/* Message Parameters */
 	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
 									/* Locker for Thread */
@@ -9369,29 +9625,29 @@ void SetStreamMsgFiller(int nTransID, char* pcharStreamMsgFiller) {
 
 				if (!csiOpInfo.AddSendMsg("SETSTREAMMSGFILLER", astrParams, 2)) {
 	
-					csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGFILLER' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' failed.");
+					csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGFILLER' with transaction ID: '" + to_string(nTransID) + "' failed.");
 				}
 			}
 			else {
 	
-				csiOpInfo.AddReplacementErrorMsg("Sending message 'SETSTREAMMSGFILLER' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "' and stream message filler character: '" + 
+				csiOpInfo.AddReplacementErrorMsg("Sending message 'SETSTREAMMSGFILLER' with transaction ID: '" + to_string(nTransID) + "' and stream message filler character: '" + 
 												 string(pcharStreamMsgFiller) + "' failed due to being bigger than 1 character.", "Warning: Invalid setting, change was ignored.");
 			}
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGFILLER' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGFILLER' with transaction ID: '" + to_string(nTransID) + "', unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGFILLER' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGFILLER' with transaction ID: '" + to_string(nTransID) + "', locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGFILLER' with transaction ID: '" + csiOpInfo.IntToString(nTransID) + "', an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("Sending message 'SETSTREAMMSGFILLER' with transaction ID: '" + to_string(nTransID) + "', an exception occurred.", exError.what(), true);
 	}
 }
 
@@ -9879,30 +10135,61 @@ void DebugReceived(int nMsgIndex, char* pcharMsg, char* pcharRetMsgLen) {
 
 		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
 
-			csiOpInfo.PrepStringOut(csiOpInfo.IntToString(csiOpInfo.PrepCharArrayOut(csiOpInfo.DebugReceived(nMsgIndex), 
-																					 pcharMsg, 
-																					 csiOpInfo.DebugReceivedMsgLength(nMsgIndex),
-																					 atoi(pcharRetMsgLen))), 
+			csiOpInfo.PrepStringOut(to_string(csiOpInfo.PrepCharArrayOut(csiOpInfo.DebugReceived(nMsgIndex), 
+																		 pcharMsg, 
+																		 csiOpInfo.DebugReceivedMsgLength(nMsgIndex),
+																		 atoi(pcharRetMsgLen))), 
 									pcharRetMsgLen, 
 									csiOpInfo.MSGLENSIZE);
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("During debugging received message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("During debugging received message for index, " + to_string(nMsgIndex) + ", unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("During debugging received message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("During debugging received message for index, " + to_string(nMsgIndex) + ", locking thread failed.");
 			csiOpInfo.PrepStringOut("0", pcharRetMsgLen, csiOpInfo.MSGLENSIZE);
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("During debugging received message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("During debugging received message for index, " + to_string(nMsgIndex) + ", an exception occurred.", exError.what(), true);
 		csiOpInfo.PrepStringOut("0", pcharRetMsgLen, csiOpInfo.MSGLENSIZE);
 	}
+}
+
+char* DebugReceivedPointer(int nMsgIndex) {
+	
+	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
+									/* Locker for Thread */
+	char* pcharMsg = NULL;			/* Returned Message */
+	
+	try {
+
+		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
+
+			pcharMsg = csiOpInfo.DebugReceived(nMsgIndex);
+
+			if (!ReleaseMutex(hmuxLock)) {
+			
+				csiOpInfo.AddLogErrorMsg("During debugging received message for index, " + to_string(nMsgIndex) + ", unlocking thread failed.");
+			}
+		}
+		else {
+			
+			csiOpInfo.AddLogErrorMsg("During debugging received message for index, " + to_string(nMsgIndex) + ", locking thread failed.");
+		}
+	}
+	catch (exception& exError) {
+		
+		ReleaseMutex(hmuxLock);
+		csiOpInfo.AddLogErrorMsg("During debugging received message for index, " + to_string(nMsgIndex) + ", an exception occurred.", exError.what(), true);
+	}
+
+	return pcharMsg;
 }
 
 void DebugToSend(int nMsgIndex, char* pcharMsg, char* pcharRetMsgLen) {
@@ -9914,30 +10201,61 @@ void DebugToSend(int nMsgIndex, char* pcharMsg, char* pcharRetMsgLen) {
 
 		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
 
-			csiOpInfo.PrepStringOut(csiOpInfo.IntToString(csiOpInfo.PrepCharArrayOut(csiOpInfo.DebugToSend(nMsgIndex), 
-																					 pcharMsg, 
-																					 csiOpInfo.DebugSendMsgLength(nMsgIndex),
-																					 atoi(pcharRetMsgLen))), 
+			csiOpInfo.PrepStringOut(to_string(csiOpInfo.PrepCharArrayOut(csiOpInfo.DebugToSend(nMsgIndex), 
+																		 pcharMsg, 
+																		 csiOpInfo.DebugSendMsgLength(nMsgIndex),
+																		 atoi(pcharRetMsgLen))), 
 									pcharRetMsgLen, 
 									csiOpInfo.MSGLENSIZE);
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("During debugging sending message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("During debugging sending message for index, " + to_string(nMsgIndex) + ", unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("During debugging sending message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("During debugging sending message for index, " + to_string(nMsgIndex) + ", locking thread failed.");
 			csiOpInfo.PrepStringOut("0", pcharRetMsgLen, csiOpInfo.MSGLENSIZE);
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("During debugging sending message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("During debugging sending message for index, " + to_string(nMsgIndex) + ", an exception occurred.", exError.what(), true);
 		csiOpInfo.PrepStringOut("0", pcharRetMsgLen, csiOpInfo.MSGLENSIZE);
 	}
+}
+
+char* DebugToSendPointer(int nMsgIndex) {
+	
+	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
+									/* Locker for Thread */
+	char* pcharMsg = NULL;			/* Returned Message */
+
+	try {
+
+		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
+
+			pcharMsg = csiOpInfo.DebugToSend(nMsgIndex);
+
+			if (!ReleaseMutex(hmuxLock)) {
+			
+				csiOpInfo.AddLogErrorMsg("During debugging sending message for index, " + to_string(nMsgIndex) + ", unlocking thread failed.");
+			}
+		}
+		else {
+			
+			csiOpInfo.AddLogErrorMsg("During debugging sending message for index, " + to_string(nMsgIndex) + ", locking thread failed.");
+		}
+	}
+	catch (exception& exError) {
+		
+		ReleaseMutex(hmuxLock);
+		csiOpInfo.AddLogErrorMsg("During debugging sending message for index, " + to_string(nMsgIndex) + ", an exception occurred.", exError.what(), true);
+	}
+
+	return pcharMsg;
 }
 
 void DebugReceivedStored(int nMsgIndex, char* pcharMsg, char* pcharRetMsgLen) {
@@ -9949,30 +10267,61 @@ void DebugReceivedStored(int nMsgIndex, char* pcharMsg, char* pcharRetMsgLen) {
 
 		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
 
-			csiOpInfo.PrepStringOut(csiOpInfo.IntToString(csiOpInfo.PrepCharArrayOut(csiOpInfo.DebugReceivedStored(nMsgIndex), 
-																					 pcharMsg, 
-																					 csiOpInfo.DebugReceivedStoredMsgLength(nMsgIndex),
-																					 atoi(pcharRetMsgLen))), 
+			csiOpInfo.PrepStringOut(to_string(csiOpInfo.PrepCharArrayOut(csiOpInfo.DebugReceivedStored(nMsgIndex), 
+																		 pcharMsg, 
+																		 csiOpInfo.DebugReceivedStoredMsgLength(nMsgIndex),
+																		 atoi(pcharRetMsgLen))), 
 									pcharRetMsgLen, 
 									csiOpInfo.MSGLENSIZE);
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("During debugging stored received message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("During debugging stored received message for index, " + to_string(nMsgIndex) + ", unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("During debugging stored received message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("During debugging stored received message for index, " + to_string(nMsgIndex) + ", locking thread failed.");
 			csiOpInfo.PrepStringOut("0", pcharRetMsgLen, csiOpInfo.MSGLENSIZE);
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("During debugging stored received message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("During debugging stored received message for index, " + to_string(nMsgIndex) + ", an exception occurred.", exError.what(), true);
 		csiOpInfo.PrepStringOut("0", pcharRetMsgLen, csiOpInfo.MSGLENSIZE);
 	}
+}
+
+char* DebugReceivedStoredPointer(int nMsgIndex) {
+	
+	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
+									/* Locker for Thread */
+	char* pcharMsg = NULL;			/* Returned Message */
+	
+	try {
+
+		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
+
+			pcharMsg = csiOpInfo.DebugReceivedStored(nMsgIndex);
+
+			if (!ReleaseMutex(hmuxLock)) {
+			
+				csiOpInfo.AddLogErrorMsg("During debugging stored received message for index, " + to_string(nMsgIndex) + ", unlocking thread failed.");
+			}
+		}
+		else {
+			
+			csiOpInfo.AddLogErrorMsg("During debugging stored received message for index, " + to_string(nMsgIndex) + ", locking thread failed.");
+		}
+	}
+	catch (exception& exError) {
+		
+		ReleaseMutex(hmuxLock);
+		csiOpInfo.AddLogErrorMsg("During debugging stored received message for index, " + to_string(nMsgIndex) + ", an exception occurred.", exError.what(), true);
+	}
+
+	return pcharMsg;
 }
 
 void DebugToSendStored(int nMsgIndex, char* pcharMsg, char* pcharRetMsgLen) {
@@ -9984,30 +10333,61 @@ void DebugToSendStored(int nMsgIndex, char* pcharMsg, char* pcharRetMsgLen) {
 
 		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
 
-			csiOpInfo.PrepStringOut(csiOpInfo.IntToString(csiOpInfo.PrepCharArrayOut(csiOpInfo.DebugToSendStored(nMsgIndex), 
-																					 pcharMsg, 
-																					 csiOpInfo.DebugSendStoredMsgLength(nMsgIndex),
-																					 atoi(pcharRetMsgLen))), 
+			csiOpInfo.PrepStringOut(to_string(csiOpInfo.PrepCharArrayOut(csiOpInfo.DebugToSendStored(nMsgIndex), 
+																		 pcharMsg, 
+																	  	 csiOpInfo.DebugSendStoredMsgLength(nMsgIndex),
+																		 atoi(pcharRetMsgLen))), 
 									pcharRetMsgLen, 
 									csiOpInfo.MSGLENSIZE);
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("During debugging stored sending message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("During debugging stored sending message for index, " + to_string(nMsgIndex) + ", unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("During debugging stored sending message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("During debugging stored sending message for index, " + to_string(nMsgIndex) + ", locking thread failed.");
 			csiOpInfo.PrepStringOut("0", pcharRetMsgLen, csiOpInfo.MSGLENSIZE);
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("During debugging stored sending message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("During debugging stored sending message for index, " + to_string(nMsgIndex) + ", an exception occurred.", exError.what(), true);
 		csiOpInfo.PrepStringOut("0", pcharRetMsgLen, csiOpInfo.MSGLENSIZE);
 	}
+}
+
+char* DebugToSendStoredPointer(int nMsgIndex) {
+	
+	HANDLE hmuxLock = csiOpInfo.ThreadLocker();
+									/* Locker for Thread */
+	char* pcharMsg = NULL;			/* Returned Message */
+
+	try {
+
+		if (hmuxLock != NULL && WaitForSingleObject(hmuxLock, INFINITE) == WAIT_OBJECT_0) {
+
+			pcharMsg = csiOpInfo.DebugToSendStored(nMsgIndex);
+
+			if (!ReleaseMutex(hmuxLock)) {
+			
+				csiOpInfo.AddLogErrorMsg("During debugging stored sending message for index, " + to_string(nMsgIndex) + ", unlocking thread failed.");
+			}
+		}
+		else {
+			
+			csiOpInfo.AddLogErrorMsg("During debugging stored sending message for index, " + to_string(nMsgIndex) + ", locking thread failed.");
+		}
+	}
+	catch (exception& exError) {
+		
+		ReleaseMutex(hmuxLock);
+		csiOpInfo.AddLogErrorMsg("During debugging stored sending message for index, " + to_string(nMsgIndex) + ", an exception occurred.", exError.what(), true);
+	}
+
+	return pcharMsg;
 }
 
 int DebugReceivedQueueCount() {
@@ -10148,18 +10528,18 @@ int DebugReceivedMsgLength(int nMsgIndex) {
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("During debugging getting length of received message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("During debugging getting length of received message for index, " + to_string(nMsgIndex) + ", unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("During debugging getting length of received message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("During debugging getting length of received message for index, " + to_string(nMsgIndex) + ", locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("During debugging getting length of received message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("During debugging getting length of received message for index, " + to_string(nMsgIndex) + ", an exception occurred.", exError.what(), true);
 	}
 
 	return nCount;
@@ -10179,18 +10559,18 @@ int DebugSendMsgLength(int nMsgIndex) {
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("During debugging getting length of sending message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("During debugging getting length of sending message for index, " + to_string(nMsgIndex) + ", unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("During debugging getting length of sending message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("During debugging getting length of sending message for index, " + to_string(nMsgIndex) + ", locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("During debugging getting length of sending message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("During debugging getting length of sending message for index, " + to_string(nMsgIndex) + ", an exception occurred.", exError.what(), true);
 	}
 
 	return nCount;
@@ -10210,18 +10590,18 @@ int DebugReceivedStoredMsgLength(int nMsgIndex) {
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("During debugging getting length of received stored message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("During debugging getting length of received stored message for index, " + to_string(nMsgIndex) + ", unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("During debugging getting length of received stored message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("During debugging getting length of received stored message for index, " + to_string(nMsgIndex) + ", locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("During debugging getting length of received stored message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("During debugging getting length of received stored message for index, " + to_string(nMsgIndex) + ", an exception occurred.", exError.what(), true);
 	}
 
 	return nCount;
@@ -10241,18 +10621,18 @@ int DebugSendStoredMsgLength(int nMsgIndex) {
 
 			if (!ReleaseMutex(hmuxLock)) {
 			
-				csiOpInfo.AddLogErrorMsg("During debugging getting length of sending stored message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", unlocking thread failed.");
+				csiOpInfo.AddLogErrorMsg("During debugging getting length of sending stored message for index, " + to_string(nMsgIndex) + ", unlocking thread failed.");
 			}
 		}
 		else {
 			
-			csiOpInfo.AddLogErrorMsg("During debugging getting length of sending stored message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", locking thread failed.");
+			csiOpInfo.AddLogErrorMsg("During debugging getting length of sending stored message for index, " + to_string(nMsgIndex) + ", locking thread failed.");
 		}
 	}
 	catch (exception& exError) {
 		
 		ReleaseMutex(hmuxLock);
-		csiOpInfo.AddLogErrorMsg("During debugging getting length of sending stored message for index, " + csiOpInfo.IntToString(nMsgIndex) + ", an exception occurred.", exError.what(), true);
+		csiOpInfo.AddLogErrorMsg("During debugging getting length of sending stored message for index, " + to_string(nMsgIndex) + ", an exception occurred.", exError.what(), true);
 	}
 
 	return nCount;
