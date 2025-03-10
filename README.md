@@ -13,6 +13,22 @@ RevCommSuite is an open source API that allows communications capabilities to be
 - Ability to create connections between multiple applications
 - Seamless recovery of lost messages between client and server through replay functionality
 
+Use Case Examples: 
+
+- Creating game instance sessions using client groups
+- Have mobile apps share information between user groups and the database
+- Update app assets directly
+- Display information on websites in near realtime time from databases and connected clients
+
+2.8 Major Update:
+
+- Added file download functionality to RevCommProcessor (C#)
+- Fixes to RevCommProcessor (C#) for Data Process synchronous response processing and removal of erroneous characters in processed messages
+- Fixes to RevCommClient (JS) to remove erroneous characters in processed messages
+- Fixes to SSL connection setup in RevCommProcessor (JS)
+- Fixes to variable type recognition for RevCommServer database data retrieval
+- Removal of Peer-To-Peer and file download functionality attempts in RevCommClient (JS) and RevCommProcessor (JS)
+
 2.3 Major Update:
 
 - Added new processor for C#: RevCommProcessor.cs (with limited functionality)
