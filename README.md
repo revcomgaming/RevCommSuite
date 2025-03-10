@@ -20,6 +20,13 @@ Use Case Examples:
 - Update app assets directly
 - Display information on websites in near realtime time from databases and connected clients
 
+2.9 Major Update:
+
+- Added pointer output functions to RevCommClient (C++) for more efficient communication with processors
+- Updated OpenSSL to 3.4.0
+- Logging improvements to RevCommServer
+- In RevCommServer, added ability to change database connection timeout and database data transaction type size checks
+ 
 2.8 Major Update:
 
 - Added file download functionality to RevCommProcessor (C#)
